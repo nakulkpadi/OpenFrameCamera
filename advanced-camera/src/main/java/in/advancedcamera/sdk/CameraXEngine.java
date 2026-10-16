@@ -73,7 +73,9 @@ public final class CameraXEngine implements CameraEngine {
     private FrameLayout root, previewStage;
     private LinearLayout quickPanel, morePanel, detailControls, zoomPresetBar;
     private HorizontalScrollView modeScroller;
-    private TextView shutterControl, formatButton, videoSettingsButton;
+    private ImageView shutterControl;
+    private TextView recordingStopIndicator, formatButton, videoSettingsButton;
+    private LinearLayout videoSettingsPanel;
     private FocusRing focusRing;
     private PhotoFormat photoFormat = PhotoFormat.JPEG;
     private File rawCaptureFile;
@@ -382,23 +384,37 @@ public final class CameraXEngine implements CameraEngine {
         LinearLayout captureRow = new LinearLayout(activity);
         captureRow.setGravity(Gravity.CENTER_VERTICAL);
         captureRow.setPadding(dp(10), dp(7), dp(10), dp(3));
-        TextView filters = roundAction("✦", "Filters applied after capture", v ->
-            show("Shoot first • edit filters and brightness on the review screen"));
-        captureRow.addView(filters, new LinearLayout.LayoutParams(0, dp(58), 1f));
-        shutterControl = text("●", 44, true);
-        shutterControl.setBackground(background(ACCENT, 80, 0xFFF9D7A4));
-        shutterControl.setTextColor(0xFFFFE2BE);
-        shutterControl.setContentDescription("Capture photo or start and stop video recording");
-        LinearLayout.LayoutParams shutterParams = new LinearLayout.LayoutParams(dp(83), dp(83));
-        shutterParams.setMargins(dp(16), 0, dp(16), 0);
-        captureRow.addView(shutterControl, shutterParams);
-        shutterControl.setOnClickListener(v -> {
-            if (morePanel != null) morePanel.setVisibility(View.GONE);
-            if (quickPanel != null) quickPanel.setVisibility(View.GONE);
-            onShutter(shutterControl);
+        TextView filters = roundAction("✦", "Filters available during photo review",
+            v -> show("Shoot first • choose filters and brightness in review"));
+        captureRow.addView(filters,new LinearLayout.LayoutParams(0,dp(58),1f));
+
+        FrameLayout shutterFrame = new FrameLayout(activity);
+        shutterControl = new ImageView(activity);
+        shutterControl.setImageResource(R.drawable.btn_capture_photo);
+        shutterControl.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        shutterControl.setBackgroundColor(Color.TRANSPARENT);
+        shutterControl.setContentDescription("Take photo");
+        shutterFrame.addView(shutterControl,new FrameLayout.LayoutParams(-1,-1));
+        recordingStopIndicator = text("■",29,true);
+        recordingStopIndicator.setTextColor(Color.WHITE);
+        recordingStopIndicator.setVisibility(View.GONE);
+        shutterFrame.addView(recordingStopIndicator,new FrameLayout.LayoutParams(-1,-1));
+        LinearLayout.LayoutParams shutterParams = new LinearLayout.LayoutParams(dp(91),dp(91));
+        shutterParams.setMargins(dp(13),0,dp(13),0);
+        captureRow.addView(shutterFrame,shutterParams);
+        shutterFrame.setContentDescription("Capture photo or start/stop recording");
+        shutterFrame.setOnClickListener(v -> {
+            closePopups();
+            onShutter();
         });
-        TextView flip = roundAction("⟳", "Switch front and rear cameras", v -> flipCamera());
-        captureRow.addView(flip, new LinearLayout.LayoutParams(0, dp(58), 1f));
+
+        ImageView flip = new ImageView(activity);
+        flip.setImageResource(R.drawable.btn_switch_camera);
+        flip.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        flip.setBackgroundColor(Color.TRANSPARENT);
+        flip.setContentDescription("Switch front and rear camera");
+        flip.setOnClickListener(v -> {closePopups();flipCamera();});
+        captureRow.addView(flip,new LinearLayout.LayoutParams(0,dp(58),1f));
         bottomPanel.addView(captureRow, new LinearLayout.LayoutParams(-1, dp(103)));
 
         modeScroller = new HorizontalScrollView(activity);
@@ -602,11 +618,14 @@ public final class CameraXEngine implements CameraEngine {
         p.setMargins(dp(3),0,dp(3),0);zoomPresetBar.addView(item,p);
     }
     private void updateShutterStyle() {
-        if(shutterControl==null)return;
-        shutterControl.setBackground(background(mode==Mode.VIDEO?0xFFEF3646:ACCENT,80,0xAAFFFFFF));
-        shutterControl.setText(isRecording?"■":"●");
-        shutterControl.setContentDescription(mode==Mode.VIDEO?
-            (isRecording?"Stop video recording":"Start video recording"):"Take photo");
+        if (shutterControl == null) return;
+        shutterControl.setImageResource(mode == Mode.VIDEO ?
+            R.drawable.btn_capture_video : R.drawable.btn_capture_photo);
+        shutterControl.setContentDescription(mode == Mode.VIDEO ?
+            (isRecording ? "Stop video recording" : "Start video recording") : "Take photo");
+        if (recordingStopIndicator != null)
+            recordingStopIndicator.setVisibility(mode == Mode.VIDEO && isRecording ?
+                View.VISIBLE : View.GONE);
     }
 
     private String qualityName() {
@@ -964,11 +983,11 @@ public final class CameraXEngine implements CameraEngine {
             } else show("Camera unavailable • " + ex.getClass().getSimpleName() + " • tap to retry");
         }
     }
-    private void onShutter(TextView button) {
+    private void onShutter() {
         if (inReview || busy) return;
         if(mode==Mode.VIDEO) {
             if(isRecording) {if(recording!=null)recording.stop();updateShutterStyle();}
-            else beginVideo(button);
+            else beginVideo();
             return;
         }
         if(imageCapture==null){show("Camera not ready");return;}
@@ -1036,7 +1055,7 @@ public final class CameraXEngine implements CameraEngine {
                 }
             });
     }
-    private void beginVideo(TextView button) {
+    private void beginVideo() {
         if(videoCapture==null){show("Video mode not ready");return;}
         try {captureFile=session.createPrivateCaptureFile(".mp4");}
         catch(IOException e){show("Cannot create video file");return;}
