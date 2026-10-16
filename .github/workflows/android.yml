@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  statuses: write
 
 jobs:
   build:
@@ -45,38 +45,22 @@ jobs:
             camera-app/build/outputs/apk/debug/*.apk
             integration-example/build/outputs/apk/debug/*.apk
             advanced-camera/build/outputs/aar/*.aar
-      - name: Report failed push build to GitHub Issues
-        if: ${{ failure() && github.event_name == 'push' }}
+      - name: Publish CI result as GitHub commit status
+        if: ${{ always() && github.event_name == 'push' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          SDK_OUTCOME: ${{ steps.sdk.outcome }}
-          PLATFORMS_OUTCOME: ${{ steps.platforms.outcome }}
-          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+          JOB_RESULT: ${{ job.status }}
         run: |
-          python3 - <<'PY'
-          import os,re,pathlib
-          log=pathlib.Path(os.environ["RUNNER_TEMP"])/"openframe-build.log"
-          lines=log.read_text(errors="replace").splitlines() if log.exists() else []
-          matches=[i for i,line in enumerate(lines) if re.search(r"(^e: |error:|What went wrong|Execution failed|FAILURE:|Could not |failed with|symbol:|location:|\> Task .* FAILED)",line,re.I)]
-          keep=set()
-          for i in matches[-24:]:
-              keep.update(range(max(0,i-1),min(len(lines),i+4)))
-          excerpt="\n".join(lines[i] for i in sorted(keep))
-          if not excerpt and lines: excerpt="\n".join(lines[-45:])
-          excerpt=excerpt[-13000:]
-          # Discard common token-like assignments from excerpts.
-          excerpt=re.sub(r"(?im)^.*(?:PASSWORD|TOKEN|SECRET|API_KEY)\s*[=:].*$","[redacted environment value]",excerpt)
-          report=(
-              "Automated OpenFrame Camera build diagnostic.\n\n"
-              f"Commit: `{os.environ['GITHUB_SHA']}`\n"
-              f"Run: https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}\n\n"
-              f"Stages: Android SDK={os.getenv('SDK_OUTCOME')}, "
-              f"platforms={os.getenv('PLATFORMS_OUTCOME')}, "
-              f"Gradle compile={os.getenv('COMPILE_OUTCOME')}.\n\n"
-              "Relevant Gradle error excerpt:\n\n```text\n"
-              + (excerpt or "Build did not reach Gradle or no build log was captured.")
-              + "\n```\n")
-          pathlib.Path("/tmp/openframe-ci-report.md").write_text(report)
-          PY
-          gh issue create --title "CI build failure: ${GITHUB_SHA::7}" --body-file /tmp/openframe-ci-report.md || true
+          if [ "$JOB_RESULT" = "success" ]; then
+            STATE=success
+            SUMMARY="Android APK and AAR build succeeded"
+          else
+            STATE=failure
+            SUMMARY="Android CI failed - open workflow logs"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$STATE" \
+            -f context="openframe/android-build" \
+            -f description="$SUMMARY" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
