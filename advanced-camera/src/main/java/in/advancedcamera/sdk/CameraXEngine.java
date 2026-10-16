@@ -1175,11 +1175,23 @@ public final class CameraXEngine implements CameraEngine {
                 if(q!=videoQuality){videoQuality=q;show("Selected video quality unavailable; using 720p");}
                 Recorder recorder=new Recorder.Builder().setQualitySelector(
                     QualitySelector.from(q,FallbackStrategy.lowerQualityOrHigherThan(q))).build();
-                VideoCapture.Builder<Recorder> vb=new VideoCapture.Builder<>(recorder);
-                if(supportsFps(videoFps))
-                    vb.setTargetFrameRate(new Range<>(videoFps,videoFps));
-                videoCapture=vb.build();
-                camera=provider.bindToLifecycle(activity,selector,preview,videoCapture);
+                videoCapture=new VideoCapture.Builder<>(recorder).build();
+                // CameraX 1.5 session-level FPS configuration is deterministic
+                // for a supported Preview + VideoCapture combination. The old
+                // VideoCapture.setTargetFrameRate() was only a preference.
+                if(!selectedEightK && videoFps==60){
+                    SessionConfig probe=new SessionConfig.Builder(preview,videoCapture).build();
+                    boolean allowed=false;
+                    for(Range<Integer> range:provider.getCameraInfo(selector).getSupportedFrameRateRanges(probe)){
+                        if(range.getLower()<=60 && range.getUpper()>=60){allowed=true;break;}
+                    }
+                    if(!allowed)throw new IllegalStateException("60fps unavailable for selected CameraX video session");
+                    SessionConfig config=new SessionConfig.Builder(preview,videoCapture)
+                        .setFrameRateRange(new Range<>(60,60)).build();
+                    camera=provider.bindToLifecycle(activity,selector,config);
+                }else{
+                    camera=provider.bindToLifecycle(activity,selector,preview,videoCapture);
+                }
             }else{
                 int desiredFormat=ImageCapture.OUTPUT_FORMAT_JPEG;
                 if(mode==Mode.PHOTO && photoFormat==PhotoFormat.RAW){
