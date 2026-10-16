@@ -1,6 +1,6 @@
 # OpenFrame Camera — Android camera app + embeddable SDK
 
-**Status: `0.2.3-beta` — GitHub CI builds run; the new high-resolution paths require physical-device testing.** OpenFrame is an **original**, independent Android camera implementation inspired by useful interaction patterns seen in premium smartphone cameras. No OEM proprietary code, binaries, shaders, art, or models are included. The original reference APK is deliberately excluded from this repository.
+**Status: `0.2.4-beta` — GitHub CI builds run; 60fps is now selectable as a guarded live test. Actual MP4 FPS must still be measured.** OpenFrame is an **original**, independent Android camera implementation inspired by useful interaction patterns seen in premium smartphone cameras. No OEM proprietary code, binaries, shaders, art, or models are included. The original reference APK is deliberately excluded from this repository.
 
 ## What you get
 
@@ -121,3 +121,11 @@ The OnePlus 12 stock camera advertises **4K/60** and **8K/24**, but these are no
 - The video resolution and frame rate must be verified using a **real recorded MP4**. A successful APK build does not prove that either 60fps or 8K works on a particular phone.
 
 The native high-resolution recorder stores output in OpenFrame's private cache, has no cloud upload, and closes its camera/session on failure, cancellation and activity shutdown. This is an experimental on-device beta feature, not an assertion of parity with OnePlus stock recording.
+
+## Video device diagnostics and 60fps test (0.2.4-beta)
+
+Open **Video > Video resolution/frame rate > 4K > 60fps**. The control no longer remains greyed out solely because an Android capability probe returned false. It attempts a CameraX 60fps session; if that session rejects the requested mode, OpenFrame falls back to **4K/30** without falsely displaying 60. When a public Camera2 + HEVC 4K/60 candidate is present, that backend can be used instead. A selectable frame rate is *not* proof that the encoder really produced that frame rate.
+
+Use **ⓘ Camera capabilities • Tap to copy report** at the bottom of the video settings popup. It displays and copies the public camera's session-specific 60fps range result, recorder stream sizes, Camera2 AE frame ranges, and Camera2 candidate detection without collecting personal information. Paste this report into the bug report if 4K/60 remains unavailable. When you capture a clip, the video review displays its actual file resolution and approximate FPS measured from video sample timestamps.
+
+The user's latest camera-switch icon attachment was a uniformly black RGB image. OpenFrame therefore uses a crisp, resolution-independent, clearly visible white circular flip glyph as a fallback. Replacing it with the user's exact icon requires a PNG with visible artwork and transparency.
