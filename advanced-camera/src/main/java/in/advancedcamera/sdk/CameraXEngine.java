@@ -159,7 +159,7 @@ public final class CameraXEngine implements CameraEngine {
         v.setOnClickListener(callback); return v;
     }
     private void addChip(LinearLayout container, TextView v) {
-        v.setMinWidth(dp(72));
+        v.setMinWidth(dp(52));
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44));
         p.setMargins(dp(3), 0, dp(3), 0); container.addView(v, p);
     }
@@ -461,8 +461,107 @@ public final class CameraXEngine implements CameraEngine {
         reviewBar.addView(actions,new LinearLayout.LayoutParams(-1,dp(60)));
         reviewBar.setVisibility(View.GONE);
         refreshModeChips();
+        updateShutterStyle();
         updateAspectUi();
         updateFlashUi();
+    }
+
+    private TextView toolbarAction(String label, String desc, View.OnClickListener click) {
+        TextView t=text(label,15,true);t.setContentDescription(desc);t.setPadding(dp(9),0,dp(9),0);
+        t.setBackground(background(0xEE24262A,27,0x44595B60));t.setOnClickListener(click);return t;
+    }
+    private TextView roundAction(String label, String desc, View.OnClickListener click) {
+        TextView t=text(label,13,false);t.setContentDescription(desc);t.setPadding(dp(5),dp(4),dp(5),dp(4));
+        t.setBackground(background(0xDA33363C,23,0x224F5157));t.setOnClickListener(click);return t;
+    }
+    private void showOptions(String[] choices, java.util.function.Consumer<String> action) {
+        if (inReview || quickPanel==null) return;
+        if(morePanel!=null)morePanel.setVisibility(View.GONE);
+        quickPanel.removeAllViews();
+        for(String choice:choices) {
+            TextView item=text(choice,13,false);item.setBackground(background(0x77232528,18,0));
+            item.setOnClickListener(v->{quickPanel.setVisibility(View.GONE);action.accept(choice);});
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);
+            p.setMargins(dp(2),0,dp(2),0);quickPanel.addView(item,p);
+        }
+        quickPanel.setAlpha(0);quickPanel.setVisibility(View.VISIBLE);
+        quickPanel.animate().alpha(1f).setDuration(150).start();
+    }
+    private void showFlashOptions() {
+        if(camera==null){show("Camera is not ready");return;}
+        if(!camera.getCameraInfo().hasFlashUnit()){show("Flash unavailable on this lens");return;}
+        if(mode==Mode.VIDEO) {
+            showOptions(new String[]{"Torch Off","Torch On"},choice->{
+                torchEnabled=choice.equals("Torch On");
+                camera.getCameraControl().enableTorch(torchEnabled);
+                updateFlashUi();show(choice);
+            });
+        } else {
+            showOptions(new String[]{"Off","Auto","On","Always on"},choice->{
+                torchEnabled=choice.equals("Always on");
+                flashMode=choice.equals("On")?ImageCapture.FLASH_MODE_ON:
+                    choice.equals("Auto")?ImageCapture.FLASH_MODE_AUTO:ImageCapture.FLASH_MODE_OFF;
+                if(imageCapture!=null)imageCapture.setFlashMode(flashMode);
+                camera.getCameraControl().enableTorch(torchEnabled);
+                updateFlashUi();show("Flash • "+choice);
+            });
+        }
+    }
+    private void showAspectOptions() {
+        if(mode==Mode.VIDEO){show("Video uses HD 16:9");return;}
+        if(session.request().purpose==CameraRequest.Purpose.TENANT_PHOTO) {
+            show("Resident portrait requires 3:4");return;
+        }
+        showOptions(new String[]{"3:4","4:3","1:1","Original"},choice->{
+            selectedAspect=choice.equals("3:4")?CameraRequest.AspectRatio.THREE_FOUR:
+                choice.equals("4:3")?CameraRequest.AspectRatio.FOUR_THREE:
+                choice.equals("1:1")?CameraRequest.AspectRatio.SQUARE:CameraRequest.AspectRatio.ORIGINAL;
+            updateAspectUi();show("Photo crop • "+aspectLabel());
+        });
+    }
+    private void showTimerOptions() {
+        showOptions(new String[]{"Off","3 sec","10 sec"},choice->{
+            timerSeconds=choice.equals("3 sec")?3:choice.equals("10 sec")?10:0;
+            timerButton.setText(timerSeconds+"s");
+            show(timerSeconds==0?"Timer off":"Timer • "+timerSeconds+" seconds");
+        });
+    }
+    private void toggleMorePanel() {
+        if(morePanel==null||inReview)return;
+        quickPanel.setVisibility(View.GONE);
+        if(morePanel.getVisibility()==View.VISIBLE)morePanel.setVisibility(View.GONE);
+        else {morePanel.setAlpha(0);morePanel.setVisibility(View.VISIBLE);
+            morePanel.animate().alpha(1f).setDuration(180).start();}
+    }
+    private void toggleDetailControls() {
+        if(detailControls==null||inReview)return;
+        if(morePanel!=null)morePanel.setVisibility(View.GONE);
+        detailControls.setVisibility(detailControls.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE);
+    }
+    private void addZoomPreset(String label,float zoom) {
+        TextView item=roundAction(label,"Zoom "+label,v->{
+            if(camera==null){show("Camera not ready");return;}
+            ZoomState state=camera.getCameraInfo().getZoomState().getValue();
+            if(state==null)return;
+            if(zoom<state.getMinZoomRatio()||zoom>state.getMaxZoomRatio()) {
+                show(label+" zoom not supported by this lens");return;
+            }
+            camera.getCameraControl().setZoomRatio(zoom);
+            zoomLabel.setText(String.format(java.util.Locale.US,"%.1f×",zoom));
+            zoomUpdating=true;
+            zoomSeek.setProgress(Math.round(1000f*(zoom-state.getMinZoomRatio())/
+                Math.max(0.001f,state.getMaxZoomRatio()-state.getMinZoomRatio())));
+            zoomUpdating=false;
+        });
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(48),dp(34));
+        p.setMargins(dp(3),0,dp(3),0);zoomPresetBar.addView(item,p);
+    }
+    private void updateShutterStyle() {
+        if(shutterControl==null)return;
+        shutterControl.setBackground(background(mode==Mode.VIDEO?0xFFEF3646:ACCENT,80,0xAAFFFFFF));
+        shutterControl.setText(isRecording?"■":"●");
+        shutterControl.setContentDescription(mode==Mode.VIDEO?
+            (isRecording?"Stop video recording":"Start video recording"):"Take photo");
     }
     private String aspectLabel() {
         switch (selectedAspect) {
@@ -671,7 +770,7 @@ public final class CameraXEngine implements CameraEngine {
                     .setFlashMode(flashMode).build();
                 camera = provider.bindToLifecycle(activity, selector, preview, imageCapture);
             }
-            if (mode == Mode.VIDEO && torchEnabled && camera.getCameraInfo().hasFlashUnit())
+            if (torchEnabled && camera.getCameraInfo().hasFlashUnit())
                 camera.getCameraControl().enableTorch(true);
             ZoomState zoom = camera.getCameraInfo().getZoomState().getValue();
             if (zoom != null) {
@@ -704,7 +803,7 @@ public final class CameraXEngine implements CameraEngine {
     private void onShutter(TextView button) {
         if (inReview || busy) return;
         if(mode==Mode.VIDEO) {
-            if(isRecording) {if(recording!=null)recording.stop();button.setText("●");}
+            if(isRecording) {if(recording!=null)recording.stop();updateShutterStyle();}
             else beginVideo(button);
             return;
         }
@@ -743,9 +842,9 @@ public final class CameraXEngine implements CameraEngine {
                 pending=pending.withAudioEnabled();
             else show("Recording without microphone audio");
             recording=pending.start(ContextCompat.getMainExecutor(activity),event->{
-                if(event instanceof VideoRecordEvent.Start){isRecording=true;button.setText("■");show("Recording • tap square to stop");}
+                if(event instanceof VideoRecordEvent.Start){isRecording=true;updateShutterStyle();show("Recording • tap square to stop");}
                 if(event instanceof VideoRecordEvent.Finalize){
-                    isRecording=false;recording=null;button.setText("●");
+                    isRecording=false;recording=null;updateShutterStyle();
                     VideoRecordEvent.Finalize end=(VideoRecordEvent.Finalize)event;
                     if(!end.hasError() && !destroyed)openReview();
                     else {if(captureFile!=null)captureFile.delete();if(!destroyed)show("Recording failed: "+end.getError());}
