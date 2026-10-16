@@ -247,6 +247,7 @@ public final class CameraXEngine implements CameraEngine {
         addChip(topBar, flashButton);
         ratioButton = toolbarAction(aspectLabel(), "Choose photo aspect ratio", v -> showAspectOptions());
         addChip(topBar, ratioButton);
+        addChip(topBar, toolbarAction("EV", "Open exposure and zoom sliders", v -> toggleDetailControls()));
         gridButton = toolbarAction(gridEnabled ? "▦" : "▤", "Toggle composition grid", v -> {
             gridEnabled = !gridEnabled;
             grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
@@ -293,7 +294,19 @@ public final class CameraXEngine implements CameraEngine {
         zoomLabel = text("1.0×", 15, true);
         zoomLabel.setTextColor(ACCENT);
         zoomLabel.setContentDescription("Toggle manual zoom and exposure adjustments");
-        zoomLabel.setOnClickListener(v -> toggleDetailControls());
+        zoomLabel.setOnClickListener(v -> {
+            if(camera==null)return;
+            ZoomState zs=camera.getCameraInfo().getZoomState().getValue();
+            if(zs==null)return;
+            float one=Math.max(zs.getMinZoomRatio(),Math.min(1f,zs.getMaxZoomRatio()));
+            camera.getCameraControl().setZoomRatio(one);
+            zoomLabel.setText(String.format(java.util.Locale.US,"%.1f×",one));
+            zoomUpdating=true;
+            zoomSeek.setProgress(Math.round(1000f*(one-zs.getMinZoomRatio())/
+                Math.max(0.001f,zs.getMaxZoomRatio()-zs.getMinZoomRatio())));
+            zoomUpdating=false;
+        });
+        zoomLabel.setOnLongClickListener(v->{toggleDetailControls();return true;});
         zoomPresetBar.addView(zoomLabel, new LinearLayout.LayoutParams(dp(64), dp(35)));
         addZoomPreset("2×", 2f);
         addZoomPreset("3×", 3f);
@@ -611,7 +624,7 @@ public final class CameraXEngine implements CameraEngine {
         boolean hasFlash = camera == null || camera.getCameraInfo().hasFlashUnit();
         flashButton.setAlpha(hasFlash ? 1f : 0.55f);
         if (mode == Mode.VIDEO) flashButton.setText(torchEnabled ? "☀" : "⚡");
-        else flashButton.setText(flashMode == ImageCapture.FLASH_MODE_ON ? "⚡" : flashMode == ImageCapture.FLASH_MODE_AUTO ? "⚡A" : "⚡̸");
+        else flashButton.setText(torchEnabled ? "☀" : flashMode == ImageCapture.FLASH_MODE_ON ? "⚡" : flashMode == ImageCapture.FLASH_MODE_AUTO ? "⚡A" : "⚡̸");
     }
     private void cycleFlash() {
         if (camera == null) { show("Camera not ready • tap status to retry"); return; }
