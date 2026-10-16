@@ -762,11 +762,34 @@ public final class CameraXEngine implements CameraEngine {
     private boolean supportsFps(int rate) {
         if(provider==null)return false;
         try {
-            for(Range<Integer> r:provider.getCameraInfo(baseSelector()).getSupportedFrameRateRanges()) {
+            androidx.camera.core.CameraInfo info=provider.getCameraInfo(baseSelector());
+            for(Range<Integer> r:info.getSupportedFrameRateRanges()) {
                 if(r.getLower()<=rate && r.getUpper()>=rate)return true;
             }
-        } catch(RuntimeException ignored){}
+            // OEM camera apps often expose 60fps through Camera2 even when
+            // CameraX preview's generic ranges are limited to 30fps.
+            Camera2CameraInfo two=Camera2CameraInfo.from(info);
+            Range<Integer>[] ranges=two.getCameraCharacteristic(
+                CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+            if(ranges!=null)for(Range<Integer> r:ranges){
+                if(r.getLower()<=rate && r.getUpper()>=rate)return true;
+            }
+        }catch(Exception ex){android.util.Log.w("OpenFrame","FPS capabilities unavailable",ex);}
         return false;
+    }
+    private boolean reportsEightKProfile() {
+        if(provider==null || android.os.Build.VERSION.SDK_INT<31)return false;
+        try {
+            String id=Camera2CameraInfo.from(provider.getCameraInfo(baseSelector())).getCameraId();
+            int numericId=Integer.parseInt(id);
+            return android.media.CamcorderProfile.hasProfile(
+                numericId, android.media.CamcorderProfile.QUALITY_8KUHD);
+        }catch(Exception ignored){return false;}
+    }
+    private void explainEightK() {
+        show(reportsEightKProfile()
+            ? "This lens reports 8K to Android. OpenFrame needs a Camera2 8K encoder; CameraX supports up to 4K here."
+            : "8K recording is not exposed through OpenFrame's CameraX backend on this lens.");
     }
     private TextView premiumTool(String label,int size,Runnable click) {
         TextView button=text(label,size,false);
@@ -855,8 +878,9 @@ public final class CameraXEngine implements CameraEngine {
             ()->setVideoQuality(Quality.FHD));
         videoChoice(resolutions,"4K",videoQuality==Quality.UHD,supportsVideoQuality(Quality.UHD),
             ()->setVideoQuality(Quality.UHD));
-        // CameraX currently has no separate 8K quality constant. Never claim 8K output.
-        videoChoice(resolutions,"8K",false,false,()->{});
+        // Visible for discovery, but tapping explains why stock-app 8K may
+        // be unavailable. Never save 4K while displaying an 8K indicator.
+        videoChoice(resolutions,"8K",false,true,()->explainEightK());
         videoSettingsPanel.addView(resolutions,new LinearLayout.LayoutParams(-1,dp(48)));
         LinearLayout fps=videoRow("Frame rate");
         videoChoice(fps,"30fps",videoFps==30,supportsFps(30),()->setVideoFps(30));
