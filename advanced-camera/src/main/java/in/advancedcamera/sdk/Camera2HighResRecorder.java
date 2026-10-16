@@ -79,9 +79,9 @@ final class Camera2HighResRecorder {
                 }
             }
             if(!sizeAvailable) return false;
-            Range<Integer>[] fps=c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+            Range<Integer>[] aeFpsRanges=c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
             boolean fpsAvailable=false;
-            if(fps!=null)for(Range<Integer> range:fps) {
+            if(aeFpsRanges!=null)for(Range<Integer> range:aeFpsRanges) {
                 if(range.getLower()<=fps && range.getUpper()>=fps) {
                     fpsAvailable=true;break;
                 }
