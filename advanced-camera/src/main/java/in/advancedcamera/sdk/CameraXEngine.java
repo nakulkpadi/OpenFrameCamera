@@ -65,7 +65,12 @@ public final class CameraXEngine implements CameraEngine {
     private static final String[] FILTERS = {"Natural", "Mono", "Warm", "Cool", "Vivid"};
     private CameraSession session;
     private ComponentActivity activity;
-    private FrameLayout root;
+    private FrameLayout root, previewStage;
+    private LinearLayout quickPanel, morePanel, detailControls, zoomPresetBar;
+    private HorizontalScrollView modeScroller;
+    private TextView shutterControl;
+    private static final int ACCENT = 0xFFFF941C;
+    private static final int PANEL_BG = 0xF2181A1D;
     private PreviewView viewfinder;
     private ImageView imageReview;
     private VideoView videoReview;
@@ -165,7 +170,11 @@ public final class CameraXEngine implements CameraEngine {
         activity.setContentView(root);
         viewfinder = new PreviewView(activity);
         viewfinder.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
-        root.addView(viewfinder, new FrameLayout.LayoutParams(-1, -1));
+        previewStage = new FrameLayout(activity);
+        FrameLayout.LayoutParams stageParams = new FrameLayout.LayoutParams(-1, -1);
+        stageParams.topMargin = dp(82); stageParams.bottomMargin = dp(190);
+        root.addView(previewStage, stageParams);
+        previewStage.addView(viewfinder, new FrameLayout.LayoutParams(-1, -1));
         viewfinder.getPreviewStreamState().observe(activity, streamState -> {
             previewStreaming = streamState == PreviewView.StreamState.STREAMING;
             if (previewStreaming && !destroyed && !inReview) {
@@ -184,7 +193,7 @@ public final class CameraXEngine implements CameraEngine {
             }
         };
         grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
-        root.addView(grid, new FrameLayout.LayoutParams(-1,-1));
+        previewStage.addView(grid, new FrameLayout.LayoutParams(-1,-1));
         ScaleGestureDetector pinch = new ScaleGestureDetector(activity, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override public boolean onScaleBegin(ScaleGestureDetector detector) {
                 pinchInProgress=true; return true;
@@ -218,40 +227,82 @@ public final class CameraXEngine implements CameraEngine {
             show("Focusing • tap again to refocus");
             return true;
         });
+
+        // OpenFrame original premium camera skin. The preview and camera engine
+        // remain independent of these controls, so embedded integrations match.
         topBar = new LinearLayout(activity);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setPadding(dp(10),dp(12),dp(10),dp(12));
-        FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
-        topParams.topMargin = dp(30);
+        topBar.setPadding(dp(12), dp(5), dp(12), dp(5));
+        FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(-1, dp(60), Gravity.TOP);
+        topParams.topMargin = dp(9);
         HorizontalScrollView scroll = new HorizontalScrollView(activity);
         scroll.setHorizontalScrollBarEnabled(false);
         scroll.setFillViewport(true);
-        scroll.addView(topBar, new HorizontalScrollView.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.addView(topBar, new HorizontalScrollView.LayoutParams(-2, -1));
         root.addView(scroll, topParams);
         topControls = scroll;
-        addChip(topBar, chip("✕", v -> session.cancel()));
-        flashButton = chip("⚡ Auto", v -> cycleFlash()); addChip(topBar, flashButton);
-        ratioButton = chip(aspectLabel(), v -> cycleAspect()); addChip(topBar, ratioButton);
-        gridButton = chip("Grid", v -> {gridEnabled=!gridEnabled;grid.setVisibility(gridEnabled?View.VISIBLE:View.GONE);}); addChip(topBar, gridButton);
-        timerButton = chip("0s", v -> {timerSeconds=timerSeconds==0?3:timerSeconds==3?10:0;timerButton.setText(timerSeconds+"s");}); addChip(topBar, timerButton);
+        addChip(topBar, toolbarAction("✕", "Close camera", v -> session.cancel()));
+        flashButton = toolbarAction("⚡", "Choose flash mode", v -> showFlashOptions());
+        addChip(topBar, flashButton);
+        ratioButton = toolbarAction(aspectLabel(), "Choose photo aspect ratio", v -> showAspectOptions());
+        addChip(topBar, ratioButton);
+        gridButton = toolbarAction(gridEnabled ? "▦" : "▤", "Toggle composition grid", v -> {
+            gridEnabled = !gridEnabled;
+            grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
+            gridButton.setText(gridEnabled ? "▦" : "▤");
+            show(gridEnabled ? "Grid enabled" : "Grid disabled");
+        });
+        addChip(topBar, gridButton);
+        timerButton = toolbarAction(timerSeconds + "s", "Choose shutter timer", v -> showTimerOptions());
+        addChip(topBar, timerButton);
+        TextView menu = toolbarAction("•••", "Open camera controls", v -> toggleMorePanel());
+        addChip(topBar, menu);
+
+        quickPanel = new LinearLayout(activity);
+        quickPanel.setOrientation(LinearLayout.HORIZONTAL);
+        quickPanel.setGravity(Gravity.CENTER);
+        quickPanel.setPadding(dp(8), dp(8), dp(8), dp(8));
+        quickPanel.setBackground(background(PANEL_BG, 20, 0x665A5C60));
+        FrameLayout.LayoutParams optionsParams = new FrameLayout.LayoutParams(-1, dp(62), Gravity.TOP);
+        optionsParams.setMargins(dp(15), dp(75), dp(15), 0);
+        root.addView(quickPanel, optionsParams);
+        quickPanel.setVisibility(View.GONE);
+
         bottomPanel = new LinearLayout(activity);
         bottomPanel.setOrientation(LinearLayout.VERTICAL);
-        bottomPanel.setPadding(dp(12),dp(12),dp(12),dp(24));
+        bottomPanel.setGravity(Gravity.CENTER_HORIZONTAL);
+        bottomPanel.setPadding(dp(12), dp(4), dp(12), dp(15));
         bottomPanel.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0x00000000,0xCC05070A,0xFF05070A}));
-        FrameLayout.LayoutParams bottom = new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
-        root.addView(bottomPanel,bottom);
-        status = text("OpenFrame • ready to capture",12,false);
+            new int[]{0x00000000, 0xEB050506, 0xFF050506}));
+        FrameLayout.LayoutParams bottom = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        root.addView(bottomPanel, bottom);
+
+        status = text("Opening camera…", 11, false);
+        status.setTextColor(0xFFCDD0D5);
+        status.setGravity(Gravity.CENTER);
         status.setOnClickListener(v -> {
             if (!hasCameraPermission()) permissionLauncher.launch(Manifest.permission.CAMERA);
             else { recoveryAttempts = 0; if (provider == null) initializeCamera(); else bindCamera(); }
         });
-        status.setTextColor(0xFFCED2D7);
-        bottomPanel.addView(status,new LinearLayout.LayoutParams(-1,dp(30)));
-        zoomLabel = text("1.0×",17,true);
-        bottomPanel.addView(zoomLabel,new LinearLayout.LayoutParams(-1,dp(30)));
+        bottomPanel.addView(status, new LinearLayout.LayoutParams(-1, dp(23)));
+
+        zoomPresetBar = new LinearLayout(activity);
+        zoomPresetBar.setGravity(Gravity.CENTER);
+        bottomPanel.addView(zoomPresetBar, new LinearLayout.LayoutParams(-1, dp(37)));
+        zoomLabel = text("1.0×", 15, true);
+        zoomLabel.setTextColor(ACCENT);
+        zoomLabel.setContentDescription("Toggle manual zoom and exposure adjustments");
+        zoomLabel.setOnClickListener(v -> toggleDetailControls());
+        zoomPresetBar.addView(zoomLabel, new LinearLayout.LayoutParams(dp(64), dp(35)));
+        addZoomPreset("2×", 2f);
+        addZoomPreset("3×", 3f);
+
+        detailControls = new LinearLayout(activity);
+        detailControls.setOrientation(LinearLayout.VERTICAL);
+        detailControls.setBackground(background(0xF01C1D20, 18, 0));
+        detailControls.setPadding(dp(12), dp(7), dp(12), dp(7));
+        detailControls.setVisibility(View.GONE);
         zoomSeek = new SeekBar(activity);
         zoomSeek.setMax(1000); zoomSeek.setProgress(0);
         zoomSeek.setOnSeekBarChangeListener(new SimpleSeekBar() {
@@ -265,9 +316,11 @@ public final class CameraXEngine implements CameraEngine {
                 }
             }
         });
-        bottomPanel.addView(zoomSeek,new LinearLayout.LayoutParams(-1,dp(32)));
-        LinearLayout exposureRow = new LinearLayout(activity); exposureRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView expText = text("EV",12,true); exposureRow.addView(expText,new LinearLayout.LayoutParams(dp(35),dp(30)));
+        detailControls.addView(text("ZOOM", 11, false), new LinearLayout.LayoutParams(-1, dp(18)));
+        detailControls.addView(zoomSeek, new LinearLayout.LayoutParams(-1, dp(36)));
+        LinearLayout exposureRow = new LinearLayout(activity);
+        exposureRow.setGravity(Gravity.CENTER_VERTICAL);
+        exposureRow.addView(text("EV", 12, true), new LinearLayout.LayoutParams(dp(40), dp(32)));
         exposureSeek = new SeekBar(activity); exposureSeek.setMax(100); exposureSeek.setProgress(50);
         exposureSeek.setOnSeekBarChangeListener(new SimpleSeekBar() {
             @Override public void onProgressChanged(SeekBar b,int n,boolean user) {
@@ -277,37 +330,97 @@ public final class CameraXEngine implements CameraEngine {
                 android.util.Range<Integer> range = exposure.getExposureCompensationRange();
                 int index = range.getLower() + Math.round((range.getUpper()-range.getLower())*n/100f);
                 camera.getCameraControl().setExposureCompensationIndex(index);
+                show("Exposure • " + index + " steps");
             }
         });
-        exposureRow.addView(exposureSeek,new LinearLayout.LayoutParams(0,dp(32),1));
-        bottomPanel.addView(exposureRow,new LinearLayout.LayoutParams(-1,dp(35)));
-        modeBar = new LinearLayout(activity);modeBar.setGravity(Gravity.CENTER);
-        bottomPanel.addView(modeBar,new LinearLayout.LayoutParams(-1,dp(48)));
-        for (Mode m : Mode.values()) {
-            if (m==Mode.VIDEO && session.request().purpose==CameraRequest.Purpose.TENANT_PHOTO) continue;
-            TextView button = text(m.name(), m.name().length()>5?10:12, m==mode);
-            button.setPadding(dp(6),dp(5),dp(6),dp(5));
-            button.setOnClickListener(v -> setMode(m));
-            modeBar.addView(button,new LinearLayout.LayoutParams(0,dp(40),1));
-        }
-        LinearLayout captureRow = new LinearLayout(activity); captureRow.setGravity(Gravity.CENTER);
-        TextView flip = chip("⟳ Flip", v -> flipCamera());
-        captureRow.addView(flip,new LinearLayout.LayoutParams(0,dp(52),1));
-        TextView shutter = text("●",59,true);
-        shutter.setTextColor(0xFFFFFFFF);
-        shutter.setContentDescription("Capture photo or start and stop video recording");
-        shutter.setBackground(background(0x55FFFFFF, 100, 0xFFFFFFFF));
-        LinearLayout.LayoutParams shutterParams = new LinearLayout.LayoutParams(dp(86),dp(86));
-        shutterParams.setMargins(dp(22),dp(6),dp(22),dp(6));
-        captureRow.addView(shutter,shutterParams);
-        shutter.setOnClickListener(v -> onShutter(shutter));
-        TextView filters = chip("Filters", v -> {
-            if (inReview) return;
-            show("Filters are available after capture • natural preview remains unchanged");
+        exposureRow.addView(exposureSeek, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        detailControls.addView(exposureRow, new LinearLayout.LayoutParams(-1, dp(40)));
+        bottomPanel.addView(detailControls, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout captureRow = new LinearLayout(activity);
+        captureRow.setGravity(Gravity.CENTER_VERTICAL);
+        captureRow.setPadding(dp(10), dp(7), dp(10), dp(3));
+        TextView filters = roundAction("✦", "Filters applied after capture", v ->
+            show("Shoot first • edit filters and brightness on the review screen"));
+        captureRow.addView(filters, new LinearLayout.LayoutParams(0, dp(58), 1f));
+        shutterControl = text("●", 44, true);
+        shutterControl.setBackground(background(ACCENT, 80, 0xFFF9D7A4));
+        shutterControl.setTextColor(0xFFFFE2BE);
+        shutterControl.setContentDescription("Capture photo or start and stop video recording");
+        LinearLayout.LayoutParams shutterParams = new LinearLayout.LayoutParams(dp(83), dp(83));
+        shutterParams.setMargins(dp(16), 0, dp(16), 0);
+        captureRow.addView(shutterControl, shutterParams);
+        shutterControl.setOnClickListener(v -> {
+            if (morePanel != null) morePanel.setVisibility(View.GONE);
+            if (quickPanel != null) quickPanel.setVisibility(View.GONE);
+            onShutter(shutterControl);
         });
-        captureRow.addView(filters,new LinearLayout.LayoutParams(0,dp(52),1));
-        bottomPanel.addView(captureRow,new LinearLayout.LayoutParams(-1,dp(105)));
-        // Editor is only visible after an actual capture; edits are applied at JPEG finalization.
+        TextView flip = roundAction("⟳", "Switch front and rear cameras", v -> flipCamera());
+        captureRow.addView(flip, new LinearLayout.LayoutParams(0, dp(58), 1f));
+        bottomPanel.addView(captureRow, new LinearLayout.LayoutParams(-1, dp(103)));
+
+        modeScroller = new HorizontalScrollView(activity);
+        modeScroller.setHorizontalScrollBarEnabled(false);
+        modeScroller.setFillViewport(true);
+        modeBar = new LinearLayout(activity);
+        modeBar.setGravity(Gravity.CENTER);
+        modeBar.setOrientation(LinearLayout.HORIZONTAL);
+        modeBar.setPadding(dp(10), 0, dp(10), 0);
+        modeScroller.addView(modeBar, new HorizontalScrollView.LayoutParams(-2, dp(48)));
+        bottomPanel.addView(modeScroller, new LinearLayout.LayoutParams(-1, dp(53)));
+        for (Mode m : new Mode[]{Mode.VIDEO, Mode.PHOTO, Mode.PORTRAIT, Mode.NIGHT, Mode.HDR}) {
+            if (m == Mode.VIDEO && session.request().purpose == CameraRequest.Purpose.TENANT_PHOTO) continue;
+            TextView tab = text(m.name(), 14, false);
+            tab.setPadding(dp(16), dp(10), dp(16), dp(10));
+            tab.setOnClickListener(v -> setMode(m));
+            modeBar.addView(tab, new LinearLayout.LayoutParams(-2, dp(45)));
+        }
+        TextView moreTab = text("MORE", 14, false);
+        moreTab.setPadding(dp(16), dp(10), dp(16), dp(10));
+        moreTab.setOnClickListener(v -> toggleMorePanel());
+        modeBar.addView(moreTab, new LinearLayout.LayoutParams(-2, dp(45)));
+
+        morePanel = new LinearLayout(activity);
+        morePanel.setOrientation(LinearLayout.VERTICAL);
+        morePanel.setPadding(dp(16), dp(16), dp(16), dp(18));
+        morePanel.setBackground(background(0xF0202225, 24, 0x664B4C50));
+        FrameLayout.LayoutParams moreParams = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        moreParams.setMargins(dp(15), 0, dp(15), dp(160));
+        root.addView(morePanel, moreParams);
+        morePanel.setVisibility(View.GONE);
+        TextView moreTitle = text("CAMERA TOOLS   •   OpenFrame", 12, true);
+        moreTitle.setTextColor(ACCENT);
+        morePanel.addView(moreTitle, new LinearLayout.LayoutParams(-1, dp(30)));
+        LinearLayout toolsRow = new LinearLayout(activity);
+        toolsRow.setGravity(Gravity.CENTER);
+        TextView aspectTool = roundAction("▣  Ratio", "Choose crop framing", v -> { morePanel.setVisibility(View.GONE); showAspectOptions(); });
+        TextView flashTool = roundAction("⚡  Flash", "Choose flash option", v -> {morePanel.setVisibility(View.GONE); showFlashOptions();});
+        TextView gridTool = roundAction("▦  Grid", "Toggle composition grid", v -> {
+            morePanel.setVisibility(View.GONE);
+            gridEnabled = !gridEnabled; grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
+            gridButton.setText(gridEnabled ? "▦" : "▤");
+        });
+        toolsRow.addView(aspectTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        toolsRow.addView(flashTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        toolsRow.addView(gridTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        morePanel.addView(toolsRow);
+        TextView extensionsText = text("DEVICE CAMERA EXTENSIONS", 11, true);
+        extensionsText.setTextColor(0xFFAEB4BA);
+        morePanel.addView(extensionsText, new LinearLayout.LayoutParams(-1, dp(35)));
+        LinearLayout extRow = new LinearLayout(activity);
+        extRow.setGravity(Gravity.CENTER);
+        for (Mode ext : new Mode[]{Mode.NIGHT, Mode.PORTRAIT, Mode.HDR}) {
+            TextView extButton = roundAction(ext.name(), ext.name() + " camera extension", v -> {
+                morePanel.setVisibility(View.GONE); setMode(ext);
+            });
+            extRow.addView(extButton, new LinearLayout.LayoutParams(0, dp(52), 1f));
+        }
+        morePanel.addView(extRow);
+        TextView disclaimer = text("Pro RAW • Panorama • Time-lapse • 4K/60: planned, not yet implemented", 11, false);
+        disclaimer.setTextColor(0xFFB3B8BD);
+        disclaimer.setPadding(dp(6),dp(10),dp(6),0);
+        morePanel.addView(disclaimer, new LinearLayout.LayoutParams(-1, dp(54)));
+                // Editor is only visible after an actual capture; edits are applied at JPEG finalization.
         imageReview = new ImageView(activity); imageReview.setBackgroundColor(Color.BLACK);
         imageReview.setScaleType(ImageView.ScaleType.FIT_CENTER); imageReview.setVisibility(View.GONE);
         root.addView(imageReview,new FrameLayout.LayoutParams(-1,-1));
@@ -315,7 +428,7 @@ public final class CameraXEngine implements CameraEngine {
         root.addView(videoReview,new FrameLayout.LayoutParams(-1,-1));
         reviewBar = new LinearLayout(activity); reviewBar.setOrientation(LinearLayout.VERTICAL);
         reviewBar.setPadding(dp(12),dp(14),dp(12),dp(24));
-        reviewBar.setBackground(background(0xF0101216,18,0));
+        reviewBar.setBackground(background(PANEL_BG, 18, 0));
         FrameLayout.LayoutParams reviewParams=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
         root.addView(reviewBar,reviewParams);
         filterLabel = text("Natural • non-destructive preview",13,true);
@@ -342,7 +455,7 @@ public final class CameraXEngine implements CameraEngine {
         LinearLayout actions=new LinearLayout(activity);actions.setGravity(Gravity.CENTER);
         TextView retake=chip("↶  Retake",v->retake());
         TextView confirm=chip("✓  Use photo / video",v->confirm());
-        confirm.setBackground(background(0xFFE4F2B5,27,0));confirm.setTextColor(Color.BLACK);
+        confirm.setBackground(background(ACCENT,27,0));confirm.setTextColor(Color.BLACK);
         actions.addView(retake,new LinearLayout.LayoutParams(0,dp(56),1));
         actions.addView(confirm,new LinearLayout.LayoutParams(0,dp(56),1));
         reviewBar.addView(actions,new LinearLayout.LayoutParams(-1,dp(60)));
@@ -365,10 +478,10 @@ public final class CameraXEngine implements CameraEngine {
      */
     private void updateAspectUi() {
         if (ratioButton != null) ratioButton.setText(mode == Mode.VIDEO ? "16:9" : aspectLabel());
-        if (root == null || viewfinder == null || grid == null) return;
-        root.post(() -> {
-            if (destroyed || root.getWidth() == 0 || root.getHeight() == 0) return;
-            int width = root.getWidth(), height = root.getHeight();
+        if (previewStage == null || viewfinder == null || grid == null) return;
+        previewStage.post(() -> {
+            if (destroyed || previewStage.getWidth() == 0 || previewStage.getHeight() == 0) return;
+            int width = previewStage.getWidth(), height = previewStage.getHeight();
             if (mode != Mode.VIDEO && selectedAspect != CameraRequest.AspectRatio.ORIGINAL) {
                 double aspect = selectedAspect == CameraRequest.AspectRatio.THREE_FOUR ? 0.75
                         : selectedAspect == CameraRequest.AspectRatio.FOUR_THREE ? (4.0 / 3.0) : 1.0;
@@ -398,9 +511,8 @@ public final class CameraXEngine implements CameraEngine {
         if (flashButton == null) return;
         boolean hasFlash = camera == null || camera.getCameraInfo().hasFlashUnit();
         flashButton.setAlpha(hasFlash ? 1f : 0.55f);
-        if (mode == Mode.VIDEO) flashButton.setText(torchEnabled ? "Torch On" : "Torch Off");
-        else flashButton.setText(flashMode == ImageCapture.FLASH_MODE_AUTO ? "Flash Auto"
-                : flashMode == ImageCapture.FLASH_MODE_ON ? "Flash On" : "Flash Off");
+        if (mode == Mode.VIDEO) flashButton.setText(torchEnabled ? "☀" : "⚡");
+        else flashButton.setText(flashMode == ImageCapture.FLASH_MODE_ON ? "⚡" : flashMode == ImageCapture.FLASH_MODE_AUTO ? "⚡A" : "⚡̸");
     }
     private void cycleFlash() {
         if (camera == null) { show("Camera not ready • tap status to retry"); return; }
@@ -440,11 +552,15 @@ public final class CameraXEngine implements CameraEngine {
                 show(next.name()+" unavailable on this device / lens"); return;
             }
         }
+        if (quickPanel != null) quickPanel.setVisibility(View.GONE);
+        if (morePanel != null) morePanel.setVisibility(View.GONE);
+        if (detailControls != null) detailControls.setVisibility(View.GONE);
         if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
         mode=next;
         refreshModeChips();
         updateAspectUi();
         updateFlashUi();
+        updateShutterStyle();
         if(next==Mode.VIDEO && ContextCompat.checkSelfPermission(activity,Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED)
             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);
         show(next==Mode.VIDEO?"Video • tap to record":next.name()+" • ready");
@@ -456,7 +572,12 @@ public final class CameraXEngine implements CameraEngine {
             TextView chip=(TextView)modeBar.getChildAt(i);
             boolean selected=mode.name().equals(chip.getText().toString());
             chip.setTypeface(null, selected ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
-            chip.setTextColor(selected?0xFFE4F2B5:0xFFD7DBDF);
+            chip.setTextColor(selected?ACCENT:0xFFD7DBDF);
+            chip.setBackground(selected ? background(0xDD28201B, 24, 0x66FF941C) : background(0x00000000,24,0));
+            if (selected && modeScroller != null) {
+                final int left = chip.getLeft();
+                modeScroller.post(() -> modeScroller.smoothScrollTo(Math.max(0, left - modeScroller.getWidth()/2 + chip.getWidth()/2), 0));
+            }
         }
     }
     private int extensionMode(Mode m) {
