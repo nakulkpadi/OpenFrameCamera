@@ -970,18 +970,57 @@ public final class CameraXEngine implements CameraEngine {
     }
     private void takePhoto() {
         if(imageCapture==null){busy=false;return;}
-        try {captureFile=session.createPrivateCaptureFile();}
-        catch(IOException e){busy=false;show("Cannot create private capture file");return;}
-        ImageCapture.OutputFileOptions options=new ImageCapture.OutputFileOptions.Builder(captureFile).build();
-        imageCapture.takePicture(options, ContextCompat.getMainExecutor(activity),new ImageCapture.OnImageSavedCallback() {
-            @Override public void onImageSaved(ImageCapture.OutputFileResults result) {
-                busy=false;if(!destroyed)openReview();
+        try {
+            captureFile=session.createPrivateCaptureFile();
+            if(mode==Mode.PHOTO && photoFormat==PhotoFormat.RAW)
+                rawCaptureFile=session.createPrivateCaptureFile(".dng");
+            else rawCaptureFile=null;
+        }catch(IOException e){
+            busy=false;
+            if(captureFile!=null)captureFile.delete();
+            show("Cannot create private capture file");
+            return;
+        }
+        ImageCapture.OutputFileOptions jpgOptions=
+            new ImageCapture.OutputFileOptions.Builder(captureFile).build();
+        if(rawCaptureFile!=null){
+            ImageCapture.OutputFileOptions dngOptions=
+                new ImageCapture.OutputFileOptions.Builder(rawCaptureFile).build();
+            final AtomicInteger saved=new AtomicInteger();
+            try {
+                imageCapture.takePicture(dngOptions,jpgOptions,ContextCompat.getMainExecutor(activity),
+                    new ImageCapture.OnImageSavedCallback(){
+                        @Override public void onImageSaved(ImageCapture.OutputFileResults result){
+                            if(saved.incrementAndGet()==2) {
+                                busy=false;
+                                if(!destroyed)openReview();
+                            }
+                        }
+                        @Override public void onError(ImageCaptureException e){
+                            busy=false;
+                            if(captureFile!=null)captureFile.delete();
+                            if(rawCaptureFile!=null)rawCaptureFile.delete();
+                            rawCaptureFile=null;
+                            if(!destroyed)show("RAW capture failed: "+e.getMessage());
+                        }
+                    });
+            }catch(Exception ex){
+                busy=false;
+                captureFile.delete();rawCaptureFile.delete();rawCaptureFile=null;
+                show("RAW capture unavailable: "+ex.getMessage());
             }
-            @Override public void onError(ImageCaptureException e) {
-                busy=false;if(captureFile!=null)captureFile.delete();
-                show("Photo failed: "+e.getMessage());
-            }
-        });
+            return;
+        }
+        imageCapture.takePicture(jpgOptions,ContextCompat.getMainExecutor(activity),
+            new ImageCapture.OnImageSavedCallback(){
+                @Override public void onImageSaved(ImageCapture.OutputFileResults result){
+                    busy=false;if(!destroyed)openReview();
+                }
+                @Override public void onError(ImageCaptureException e){
+                    busy=false;if(captureFile!=null)captureFile.delete();
+                    if(!destroyed)show("Photo failed: "+e.getMessage());
+                }
+            });
     }
     private void beginVideo(TextView button) {
         if(videoCapture==null){show("Video mode not ready");return;}
@@ -1011,8 +1050,9 @@ public final class CameraXEngine implements CameraEngine {
         topControls.setVisibility(View.GONE);bottomPanel.setVisibility(View.GONE);
         reviewBar.setVisibility(View.VISIBLE);
         boolean video=captureFile.getName().endsWith(".mp4");
-        boolean canFilter=!video && session.request().allowEditing && session.request().purpose!=CameraRequest.Purpose.TENANT_PHOTO;
-        boolean canEnhance=!video && session.request().allowEnhancement;
+        boolean preserveSensorData=rawCaptureFile!=null || ultraHdrCapture;
+        boolean canFilter=!video && !preserveSensorData && session.request().allowEditing && session.request().purpose!=CameraRequest.Purpose.TENANT_PHOTO;
+        boolean canEnhance=!video && !preserveSensorData && session.request().allowEnhancement;
         filterBar.setVisibility(canFilter?View.VISIBLE:View.GONE);
         brightnessSeek.setVisibility(canEnhance?View.VISIBLE:View.GONE);
         brightnessTitle.setVisibility(canEnhance?View.VISIBLE:View.GONE);
@@ -1040,7 +1080,9 @@ public final class CameraXEngine implements CameraEngine {
                 }
             }catch(IOException ex){android.util.Log.w("OpenFrame","Preview orientation unavailable",ex);}
             imageReview.setImageBitmap(reviewBitmap);
-            updateReviewFilter();
+            if(rawCaptureFile!=null) filterLabel.setText("RAW DNG • JPEG preview • original sensor data will be exported");
+            else if(ultraHdrCapture) filterLabel.setText("Ultra HDR JPEG_R • original HDR gain map preserved");
+            else updateReviewFilter();
         }
     }
     private void updateReviewFilter() {
@@ -1060,6 +1102,7 @@ public final class CameraXEngine implements CameraEngine {
         imageReview.setVisibility(View.GONE);imageReview.clearColorFilter();
         if(reviewBitmap!=null){reviewBitmap.recycle();reviewBitmap=null;}
         if(captureFile!=null)captureFile.delete();captureFile=null;
+        if(rawCaptureFile!=null)rawCaptureFile.delete();rawCaptureFile=null;
         inReview=false;filterIndex=0;brightness=0;
         reviewBar.setVisibility(View.GONE);topControls.setVisibility(View.VISIBLE);
         bottomPanel.setVisibility(View.VISIBLE);viewfinder.setVisibility(View.VISIBLE);
@@ -1070,9 +1113,17 @@ public final class CameraXEngine implements CameraEngine {
         if(!inReview||captureFile==null)return;
         reviewBar.setEnabled(false);show("Preparing private result…");
         if(captureFile.getName().endsWith(".mp4"))session.confirmVideo(captureFile);
+        else if(rawCaptureFile!=null)session.confirmRaw(rawCaptureFile,captureFile);
+        else if(ultraHdrCapture)session.confirmUltraHdr(captureFile);
         else session.confirmJpeg(captureFile,filterIndex,brightness,selectedAspect);
     }
-    @Override public boolean onBackPressed() { if(isRecording)return true; if(inReview){retake();return true;}return false; }
+    @Override public boolean onBackPressed() {
+        if(isRecording)return true;
+        if(morePanel!=null&&morePanel.getVisibility()==View.VISIBLE){morePanel.setVisibility(View.GONE);return true;}
+        if(quickPanel!=null&&quickPanel.getVisibility()==View.VISIBLE){quickPanel.setVisibility(View.GONE);return true;}
+        if(inReview){retake();return true;}
+        return false;
+    }
     @Override public void onResume() {
         paused = false;
         if (videoReview != null && inReview && videoReview.getVisibility() == View.VISIBLE) videoReview.start();
