@@ -777,10 +777,30 @@ public final class CameraXEngine implements CameraEngine {
         return button;
     }
     private void addToolCell(LinearLayout parent,String label,Runnable action) {
-        TextView button=premiumTool(label,13,action);
+        // All cells share the same centered icon size and a SINGLE LINE label.
+        // Prevents the portrait icon/label from awkwardly wrapping.
+        int split=label.indexOf(' ');
+        String icon=split<0?"▣":label.substring(0,split);
+        String title=split<0?label:label.substring(split+1).trim();
+        LinearLayout cell=new LinearLayout(activity);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER);
+        cell.setPadding(dp(3),dp(5),dp(3),dp(5));
+        cell.setBackground(background(0xDA30343B,22,0x665B626C));
+        TextView glyph=text(icon,21,true);
+        glyph.setTextColor(0xFFF6F7F8);glyph.setGravity(Gravity.CENTER);
+        cell.addView(glyph,new LinearLayout.LayoutParams(-1,dp(29)));
+        TextView caption=text(title,11,false);
+        caption.setTextColor(0xFFF4F5F7);
+        caption.setGravity(Gravity.CENTER);
+        caption.setSingleLine(true);
+        caption.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        cell.addView(caption,new LinearLayout.LayoutParams(-1,dp(20)));
+        cell.setContentDescription(title);
+        cell.setOnClickListener(v->action.run());
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1f);
-        lp.setMargins(dp(3),0,dp(3),0);
-        parent.addView(button,lp);
+        lp.setMargins(dp(4),0,dp(4),0);
+        parent.addView(cell,lp);
     }
     private void closePopups() {
         if(quickPanel!=null)quickPanel.setVisibility(View.GONE);
