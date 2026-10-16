@@ -40,7 +40,12 @@ public final class MainActivity extends ComponentActivity {
         getWindow().setNavigationBarColor(0xFF080B0F);
         camera=AdvancedCamera.register(this,result->{
             if(result.status==CameraResult.Status.CANCELLED){finish();return;}
-            if(result.status==CameraResult.Status.FAILURE){details.setText("Camera error: "+result.errorCode);return;}
+            if(result.status==CameraResult.Status.FAILURE){
+                Toast.makeText(this,"Camera error: "+result.errorCode,Toast.LENGTH_LONG).show();
+                finish();return;
+            }
+            // There is intentionally no demo/home screen before camera opens.
+            buildUi();
             lastResult=result.uri;lastMime=result.mimeType;
             details.setText("Capture ready • "+result.width+" × "+result.height+" • "+result.mimeType+"\nPrivate until you choose Export");
             image.setVisibility(View.GONE);video.setVisibility(View.GONE);
@@ -60,7 +65,9 @@ public final class MainActivity extends ComponentActivity {
             }catch(Exception ex){Toast.makeText(this,"Export failed: "+ex.getMessage(),Toast.LENGTH_LONG).show();}
         });
         CameraCacheCleaner.deleteAbandoned(this);
-        buildUi();
+        View opening=new View(this);
+        opening.setBackgroundColor(Color.BLACK);
+        setContentView(opening);
         // Standalone mode opens directly into the same embedded camera Activity.
         // Only show this result screen after the user confirms a capture.
         getWindow().getDecorView().post(() -> launchFullCamera());
