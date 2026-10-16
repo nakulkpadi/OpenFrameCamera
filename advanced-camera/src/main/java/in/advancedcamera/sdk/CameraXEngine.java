@@ -267,13 +267,15 @@ public final class CameraXEngine implements CameraEngine {
         addChip(topBar, toolbarAction("✕", "Close camera", v -> session.cancel()));
         flashButton = toolbarAction("⚡", "Choose flash mode", v -> showFlashOptions());
         addChip(topBar, flashButton);
-        ratioButton = toolbarAction(aspectLabel(), "Choose photo aspect ratio", v -> showAspectOptions());
-        addChip(topBar, ratioButton);
-        addChip(topBar, toolbarAction("EV", "Open exposure and zoom sliders", v -> toggleDetailControls()));
+        // Format follows flash, so RAW/JPG and video quality are visible
+        // without scrolling through less-frequently used controls.
         formatButton = toolbarAction("JPG", "Choose JPEG or DNG RAW photo", v -> showPhotoFormats());
         addChip(topBar, formatButton);
         videoSettingsButton = toolbarAction("1080p·30", "Video resolution and frame rate", v -> showVideoSettings());
         addChip(topBar, videoSettingsButton);
+        ratioButton = toolbarAction(aspectLabel(), "Choose photo aspect ratio", v -> showAspectOptions());
+        addChip(topBar, ratioButton);
+        addChip(topBar, toolbarAction("EV", "Open exposure and zoom sliders", v -> toggleDetailControls()));
         gridButton = toolbarAction(gridEnabled ? "▦" : "▤", "Toggle composition grid", v -> {
             gridEnabled = !gridEnabled;
             grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
