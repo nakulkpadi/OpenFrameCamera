@@ -7,7 +7,7 @@ import java.util.Objects;
 public final class CameraRequest {
     public enum Purpose { TENANT_PHOTO, PAYMENT_PROOF, GENERAL }
     public enum Facing { FRONT, BACK }
-    public enum AspectRatio { THREE_FOUR, FOUR_THREE, SQUARE, ORIGINAL }
+    public enum AspectRatio { THREE_FOUR, FOUR_THREE, SQUARE, SIXTEEN_NINE, ORIGINAL }
     public enum Format { JPEG, RAW, PNG, HEIC }
 
     private static final String KEY = "in.advancedcamera.sdk.request.";
