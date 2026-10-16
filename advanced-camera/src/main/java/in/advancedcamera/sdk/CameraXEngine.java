@@ -780,6 +780,7 @@ public final class CameraXEngine implements CameraEngine {
         if (morePanel != null) morePanel.setVisibility(View.GONE);
         if (detailControls != null) detailControls.setVisibility(View.GONE);
         if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
+        if (next != Mode.HDR) { hdrUltraFallback=false; ultraHdrCapture=false; }
         mode=next;
         if(mode!=Mode.PHOTO && session.request().format!=CameraRequest.Format.RAW) photoFormat=PhotoFormat.JPEG;
         refreshModeChips();
@@ -876,25 +877,47 @@ public final class CameraXEngine implements CameraEngine {
             camera = null;
             imageCapture = null;
             videoCapture = null;
-            CameraSelector selector = facing == CameraSelector.LENS_FACING_FRONT
-                    ? CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA;
-            if (mode != Mode.VIDEO && mode != Mode.PHOTO) {
-                if (extensions == null || !extensions.isExtensionAvailable(selector, extensionMode(mode)))
-                    throw new IllegalStateException("Requested extension no longer available");
-                selector = extensions.getExtensionEnabledCameraSelector(selector, extensionMode(mode));
+            ultraHdrCapture=false;
+            CameraSelector selector=baseSelector();
+            if(mode!=Mode.VIDEO && mode!=Mode.PHOTO && !(mode==Mode.HDR && hdrUltraFallback)){
+                if(extensions==null || !extensions.isExtensionAvailable(selector,extensionMode(mode)))
+                    throw new IllegalStateException("Requested device extension unavailable");
+                selector=extensions.getExtensionEnabledCameraSelector(selector,extensionMode(mode));
             }
-            Preview preview = new Preview.Builder().build();
+            Preview preview=new Preview.Builder().build();
             preview.setSurfaceProvider(viewfinder.getSurfaceProvider());
-            if (mode == Mode.VIDEO) {
-                Recorder recorder = new Recorder.Builder().setQualitySelector(
-                    QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD))).build();
-                videoCapture = VideoCapture.withOutput(recorder);
-                camera = provider.bindToLifecycle(activity, selector, preview, videoCapture);
-            } else {
-                imageCapture = new ImageCapture.Builder()
+            if(mode==Mode.VIDEO){
+                Quality q=supportsVideoQuality(videoQuality)?videoQuality:Quality.HD;
+                if(q!=videoQuality){videoQuality=q;show("Selected video quality unavailable; using 720p");}
+                Recorder recorder=new Recorder.Builder().setQualitySelector(
+                    QualitySelector.from(q,FallbackStrategy.lowerQualityOrHigherThan(q))).build();
+                VideoCapture.Builder<Recorder> vb=new VideoCapture.Builder<>(recorder);
+                if(supportsFps(videoFps))
+                    vb.setTargetFrameRate(new Range<>(videoFps,videoFps));
+                videoCapture=vb.build();
+                camera=provider.bindToLifecycle(activity,selector,preview,videoCapture);
+            }else{
+                int desiredFormat=ImageCapture.OUTPUT_FORMAT_JPEG;
+                if(mode==Mode.PHOTO && photoFormat==PhotoFormat.RAW){
+                    if(supportsImageFormat(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)){
+                        desiredFormat=ImageCapture.OUTPUT_FORMAT_RAW_JPEG;
+                    }else{
+                        photoFormat=PhotoFormat.JPEG;
+                        show("RAW not supported on selected lens • using JPEG");
+                    }
+                }
+                if(mode==Mode.HDR && hdrUltraFallback){
+                    if(!supportsImageFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR))
+                        throw new IllegalStateException("Ultra HDR not supported by this lens");
+                    desiredFormat=ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR;
+                    ultraHdrCapture=true;
+                }
+                ImageCapture.Builder ib=new ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    .setFlashMode(flashMode).build();
-                camera = provider.bindToLifecycle(activity, selector, preview, imageCapture);
+                    .setFlashMode(flashMode)
+                    .setOutputFormat(desiredFormat);
+                imageCapture=ib.build();
+                camera=provider.bindToLifecycle(activity,selector,preview,imageCapture);
             }
             if (torchEnabled && camera.getCameraInfo().hasFlashUnit())
                 camera.getCameraControl().enableTorch(true);
@@ -913,13 +936,16 @@ public final class CameraXEngine implements CameraEngine {
             });
             updateAspectUi();
             updateFlashUi();
-            show("Opening " + mode.name() + " preview…");
+            show("Opening " + mode.name() + (ultraHdrCapture ? " • Ultra HDR JPEG_R" : "") + " preview…");
             checkPreview(generation);
         } catch (Exception ex) {
             android.util.Log.e("OpenFrame", "Camera bind failed", ex);
             Mode failed = mode;
             if (failed != Mode.PHOTO) {
                 mode = Mode.PHOTO;
+                hdrUltraFallback = false;
+                ultraHdrCapture = false;
+                photoFormat = PhotoFormat.JPEG;
                 torchEnabled = false;
                 refreshModeChips();
                 bindCamera();
