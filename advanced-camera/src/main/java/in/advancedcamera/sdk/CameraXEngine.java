@@ -12,6 +12,15 @@ import android.graphics.Matrix;
 import androidx.exifinterface.media.ExifInterface;
 import android.graphics.Paint;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.PixelFormat;
+import android.graphics.RectF;
+import android.graphics.Path;
+import android.content.Context;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraManager;
+import androidx.camera.camera2.interop.Camera2CameraInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -73,7 +82,7 @@ public final class CameraXEngine implements CameraEngine {
     private FrameLayout root, previewStage;
     private LinearLayout quickPanel, morePanel, detailControls, zoomPresetBar;
     private HorizontalScrollView modeScroller;
-    private ImageView shutterControl;
+    private ImageView shutterControl, lastCaptureThumb;
     private TextView recordingStopIndicator, formatButton, videoSettingsButton;
     private LinearLayout videoSettingsPanel;
     private FocusRing focusRing;
@@ -395,13 +404,26 @@ public final class CameraXEngine implements CameraEngine {
         LinearLayout captureRow = new LinearLayout(activity);
         captureRow.setGravity(Gravity.CENTER_VERTICAL);
         captureRow.setPadding(dp(10), dp(7), dp(10), dp(3));
-        TextView filters = roundAction("✦", "Filters available during photo review",
-            v -> show("Shoot first • choose filters and brightness in review"));
-        captureRow.addView(filters,new LinearLayout.LayoutParams(0,dp(58),1f));
+        // Standalone only: show a thumbnail of the last locally confirmed JPEG.
+        // Embedded tenant cameras never expose the previous resident's picture.
+        FrameLayout recentHolder=new FrameLayout(activity);
+        lastCaptureThumb=new ImageView(activity);
+        lastCaptureThumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        lastCaptureThumb.setBackground(background(0xFF222429,13,0x66535960));
+        lastCaptureThumb.setClipToOutline(true);
+        lastCaptureThumb.setContentDescription("Last confirmed photo thumbnail");
+        FrameLayout.LayoutParams thumbLp=new FrameLayout.LayoutParams(dp(55),dp(55),Gravity.CENTER);
+        recentHolder.addView(lastCaptureThumb,thumbLp);
+        captureRow.addView(recentHolder,new LinearLayout.LayoutParams(0,dp(66),1f));
+        updateLastCaptureThumb();
+        recentHolder.setOnClickListener(v -> show(
+            isStandaloneGalleryAllowed() ?
+            "Confirmed photo is private • use Export from the capture review screen" :
+            "Last-photo history is hidden for embedded resident cameras"));
 
         FrameLayout shutterFrame = new FrameLayout(activity);
         shutterControl = new ImageView(activity);
-        shutterControl.setImageResource(R.drawable.btn_capture_photo);
+        shutterControl.setImageDrawable(crispShutterDrawable(false));
         shutterControl.setScaleType(ImageView.ScaleType.FIT_CENTER);
         shutterControl.setBackgroundColor(Color.TRANSPARENT);
         shutterControl.setContentDescription("Take photo");
@@ -420,7 +442,7 @@ public final class CameraXEngine implements CameraEngine {
         });
 
         ImageView flip = new ImageView(activity);
-        flip.setImageResource(R.drawable.btn_switch_camera);
+        flip.setImageDrawable(crispFlipDrawable());
         flip.setScaleType(ImageView.ScaleType.FIT_CENTER);
         flip.setBackgroundColor(Color.TRANSPARENT);
         flip.setContentDescription("Switch front and rear camera");
@@ -639,10 +661,75 @@ public final class CameraXEngine implements CameraEngine {
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(48),dp(34));
         p.setMargins(dp(3),0,dp(3),0);zoomPresetBar.addView(item,p);
     }
+    private boolean isStandaloneGalleryAllowed() {
+        return session.request().purpose == CameraRequest.Purpose.GENERAL
+            && "dev.openframe.camera".equals(activity.getPackageName());
+    }
+    private void updateLastCaptureThumb() {
+        if(lastCaptureThumb==null)return;
+        lastCaptureThumb.setImageResource(android.R.drawable.ic_menu_gallery);
+        lastCaptureThumb.setColorFilter(0xFFCED2D9);
+        if(!isStandaloneGalleryAllowed())return;
+        File dir=new File(activity.getCacheDir(),"advanced-camera/confirmed");
+        File[] files=dir.listFiles(f->f.isFile() && f.getName().endsWith(".jpg"));
+        if(files==null || files.length==0)return;
+        File latest=null;
+        for(File x:files)if(latest==null || x.lastModified()>latest.lastModified())latest=x;
+        if(latest==null)return;
+        BitmapFactory.Options o=new BitmapFactory.Options();
+        o.inJustDecodeBounds=true;
+        BitmapFactory.decodeFile(latest.getAbsolutePath(),o);
+        if(o.outWidth<=0 || o.outHeight<=0)return;
+        o.inJustDecodeBounds=false;
+        o.inSampleSize=Math.max(1,Math.min(32,
+            Math.max(o.outWidth/150,o.outHeight/150)));
+        try{
+            Bitmap thumbnail=BitmapFactory.decodeFile(latest.getAbsolutePath(),o);
+            if(thumbnail!=null){lastCaptureThumb.clearColorFilter();lastCaptureThumb.setImageBitmap(thumbnail);}
+        }catch(RuntimeException ex){android.util.Log.w("OpenFrame","Thumbnail unavailable",ex);}
+    }
+    private Drawable crispShutterDrawable(boolean video) {
+        // Sharp density-independent circles replace the old upscaled 96px bitmap.
+        GradientDrawable ring=new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setColor(0xFF29292D);
+        ring.setStroke(dp(2),0xFF56565B);
+        GradientDrawable fill=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+            video?new int[]{0xFFFF404B,0xFFE91832}:new int[]{0xFFFFB338,0xFFFF8510});
+        fill.setShape(GradientDrawable.OVAL);
+        fill.setStroke(dp(1),video?0xFFF9787E:0xFFFFC57C);
+        LayerDrawable composite=new LayerDrawable(new Drawable[]{ring,fill});
+        composite.setLayerInset(1,dp(8),dp(8),dp(8),dp(8));
+        return composite;
+    }
+    private Drawable crispFlipDrawable() {
+        return new Drawable() {
+            final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override public void draw(Canvas c) {
+                android.graphics.Rect r=getBounds();
+                float cx=r.exactCenterX(),cy=r.exactCenterY();
+                float rad=Math.min(r.width(),r.height())*0.46f;
+                p.setStyle(Paint.Style.FILL);p.setColor(0xE8212226);
+                c.drawCircle(cx,cy,rad,p);
+                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(Math.max(2f,rad*0.065f));
+                p.setStrokeCap(Paint.Cap.ROUND);p.setColor(0xFFFFFFFF);
+                RectF arc=new RectF(cx-rad*0.55f,cy-rad*0.55f,cx+rad*0.55f,cy+rad*0.55f);
+                c.drawArc(arc,-115,150,false,p);
+                c.drawArc(arc,66,148,false,p);
+                float u=rad*0.22f;
+                c.drawLine(cx+rad*0.52f,cy-rad*0.23f,cx+rad*0.52f,cy+u,p);
+                c.drawLine(cx+rad*0.52f,cy+u,cx+rad*0.25f,cy,p);
+                c.drawLine(cx-rad*0.52f,cy+rad*0.23f,cx-rad*0.52f,cy-u,p);
+                c.drawLine(cx-rad*0.52f,cy-u,cx-rad*0.25f,cy,p);
+            }
+            @Override public void setAlpha(int alpha) {}
+            @Override public void setColorFilter(android.graphics.ColorFilter f) {}
+            @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}
+        };
+    }
     private void updateShutterStyle() {
         if (shutterControl == null) return;
-        shutterControl.setImageResource(mode == Mode.VIDEO ?
-            R.drawable.btn_capture_video : R.drawable.btn_capture_photo);
+        shutterControl.setImageDrawable(crispShutterDrawable(mode == Mode.VIDEO));
         shutterControl.setContentDescription(mode == Mode.VIDEO ?
             (isRecording ? "Stop video recording" : "Start video recording") : "Take photo");
         if (recordingStopIndicator != null)
