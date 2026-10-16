@@ -709,27 +709,40 @@ public final class CameraXEngine implements CameraEngine {
         return composite;
     }
     private Drawable crispFlipDrawable() {
+        // Image file supplied in this revision has no visible pixels (solid
+        // black), so render a density-independent, high-contrast switch glyph
+        // until a valid transparent PNG is supplied.
         return new Drawable() {
-            final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
             @Override public void draw(Canvas c) {
                 android.graphics.Rect r=getBounds();
-                float cx=r.exactCenterX(),cy=r.exactCenterY();
-                float rad=Math.min(r.width(),r.height())*0.46f;
-                p.setStyle(Paint.Style.FILL);p.setColor(0xE8212226);
-                c.drawCircle(cx,cy,rad,p);
-                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(Math.max(2f,rad*0.065f));
-                p.setStrokeCap(Paint.Cap.ROUND);p.setColor(0xFFFFFFFF);
-                RectF arc=new RectF(cx-rad*0.55f,cy-rad*0.55f,cx+rad*0.55f,cy+rad*0.55f);
-                c.drawArc(arc,-115,150,false,p);
-                c.drawArc(arc,66,148,false,p);
-                float u=rad*0.22f;
-                c.drawLine(cx+rad*0.52f,cy-rad*0.23f,cx+rad*0.52f,cy+u,p);
-                c.drawLine(cx+rad*0.52f,cy+u,cx+rad*0.25f,cy,p);
-                c.drawLine(cx-rad*0.52f,cy+rad*0.23f,cx-rad*0.52f,cy-u,p);
-                c.drawLine(cx-rad*0.52f,cy-u,cx-rad*0.25f,cy,p);
+                float cx=r.exactCenterX(), cy=r.exactCenterY();
+                float radius=Math.min(r.width(),r.height())*0.44f;
+                p.setStyle(Paint.Style.FILL);p.setColor(0xEC202125);
+                c.drawCircle(cx,cy,radius,p);
+                p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);
+                p.setStrokeJoin(Paint.Join.ROUND);p.setColor(Color.WHITE);
+                p.setStrokeWidth(Math.max(2.2f,radius*0.074f));
+                float arc=radius*0.57f;
+                RectF ring=new RectF(cx-arc,cy-arc,cx+arc,cy+arc);
+                c.drawArc(ring,203f,154f,false,p);
+                c.drawArc(ring,22f,153f,false,p);
+                drawArrow(c,cx,cy,arc,357f,p);
+                drawArrow(c,cx,cy,arc,175f,p);
             }
-            @Override public void setAlpha(int alpha) {}
-            @Override public void setColorFilter(android.graphics.ColorFilter f) {}
+            private void drawArrow(Canvas c,float cx,float cy,float rad,float deg,Paint paint) {
+                double angle=Math.toRadians(deg), tangent=angle+Math.PI/2;
+                float x=cx+(float)Math.cos(angle)*rad,y=cy+(float)Math.sin(angle)*rad;
+                float step=rad*0.29f;
+                float bx=x-(float)Math.cos(tangent)*step,by=y-(float)Math.sin(tangent)*step;
+                float side=rad*0.31f;
+                c.drawLine(x,y,bx+(float)Math.cos(tangent+Math.PI/2)*side,
+                    by+(float)Math.sin(tangent+Math.PI/2)*side,paint);
+                c.drawLine(x,y,bx-(float)Math.cos(tangent+Math.PI/2)*side,
+                    by-(float)Math.sin(tangent+Math.PI/2)*side,paint);
+            }
+            @Override public void setAlpha(int alpha){}
+            @Override public void setColorFilter(android.graphics.ColorFilter filter){}
             @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}
         };
     }
@@ -807,12 +820,12 @@ public final class CameraXEngine implements CameraEngine {
     }
     private void showCameraDiagnostic() {
         if(provider==null){show("Camera not initialized");return;}
-        StringBuilder info=new StringBuilder("OpenFrame v0.2.4 camera recording capabilities\\n");
+        StringBuilder info=new StringBuilder("OpenFrame v0.2.4 camera recording capabilities\n");
         info.append("Android ").append(android.os.Build.VERSION.SDK_INT)
-            .append(" • Lens ").append(facing==CameraSelector.LENS_FACING_FRONT?"front":"rear").append("\\n");
+            .append(" • Lens ").append(facing==CameraSelector.LENS_FACING_FRONT?"front":"rear").append("\n");
         String id=currentCameraId();
-        info.append("Public Camera2 ID: ").append(id==null?"unavailable":id).append("\\n");
-        info.append("Selected: ").append(qualityName()).append(" @ ").append(videoFps).append("fps\\n");
+        info.append("Public Camera2 ID: ").append(id==null?"unavailable":id).append("\n");
+        info.append("Selected: ").append(qualityName()).append(" @ ").append(videoFps).append("fps\n");
         info.append("CameraX supports: ");
         for(Quality q:new Quality[]{Quality.HD,Quality.FHD,Quality.UHD}){
             info.append(q==Quality.UHD?"4K":q==Quality.FHD?"1080p":"720p");
@@ -821,13 +834,13 @@ public final class CameraXEngine implements CameraEngine {
                 info.append("session60=").append(supportsVideoFps(q,60)).append("; ");
             }
         }
-        info.append("\\nPublic Camera2 candidate configurations:\\n");
+        info.append("\nPublic Camera2 candidate configurations:\n");
         if(id!=null){
             try{
                 CameraManager manager=(CameraManager)activity.getSystemService(android.content.Context.CAMERA_SERVICE);
                 CameraCharacteristics c=manager.getCameraCharacteristics(id);
                 Range<Integer>[] ranges=c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
-                info.append("AE ranges: ").append(java.util.Arrays.toString(ranges)).append("\\n");
+                info.append("AE ranges: ").append(java.util.Arrays.toString(ranges)).append("\n");
                 android.hardware.camera2.params.StreamConfigurationMap map=
                     c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
                 if(map!=null){
@@ -835,12 +848,12 @@ public final class CameraXEngine implements CameraEngine {
                     info.append("MediaRecorder 4K/8K size: ");
                     if(sizes!=null)for(android.util.Size z:sizes)
                         if(z.getWidth()>=3840 && z.getHeight()>=2160)info.append(z).append(" ");
-                    info.append("\\n");
+                    info.append("\n");
                 }
             }catch(Exception ex){info.append("Camera2 query error: ").append(ex.getClass().getSimpleName());}
         }
-        info.append("Camera2 4K60 candidate: ").append(supportsNative4K60()).append("\\n");
-        info.append("Camera2 8K24 candidate: ").append(supportsEightK()).append("\\n");
+        info.append("Camera2 4K60 candidate: ").append(supportsNative4K60()).append("\n");
+        info.append("Camera2 8K24 candidate: ").append(supportsEightK()).append("\n");
         info.append("Note: third-party camera access can differ from the stock camera.");
         new android.app.AlertDialog.Builder(activity)
             .setTitle("Camera video capability report")
@@ -1481,6 +1494,42 @@ public final class CameraXEngine implements CameraEngine {
             });
         }catch(Exception ex){if(captureFile!=null)captureFile.delete();show("Recording unavailable: "+ex.getMessage());}
     }
+    /** Inspect an actual saved MP4 rather than trusting the requested FPS. */
+    private String verifyRecordedVideo() {
+        if(captureFile==null || !captureFile.isFile())return "Video file missing";
+        android.media.MediaExtractor extractor=new android.media.MediaExtractor();
+        try {
+            extractor.setDataSource(captureFile.getAbsolutePath());
+            for(int i=0;i<extractor.getTrackCount();i++){
+                android.media.MediaFormat format=extractor.getTrackFormat(i);
+                String mime=format.getString(android.media.MediaFormat.KEY_MIME);
+                if(mime==null || !mime.startsWith("video/"))continue;
+                int width=format.containsKey(android.media.MediaFormat.KEY_WIDTH)?
+                    format.getInteger(android.media.MediaFormat.KEY_WIDTH):0;
+                int height=format.containsKey(android.media.MediaFormat.KEY_HEIGHT)?
+                    format.getInteger(android.media.MediaFormat.KEY_HEIGHT):0;
+                extractor.selectTrack(i);
+                long first=-1,last=-1;int frames=0;
+                while(frames<180){
+                    long stamp=extractor.getSampleTime();
+                    if(stamp<0)break;
+                    if(first<0)first=stamp;
+                    last=stamp;
+                    frames++;
+                    if(!extractor.advance())break;
+                }
+                double measured=frames>1&&last>first?
+                    (frames-1)*1000000.0/(last-first):0;
+                String report="Saved video "+width+"×"+height;
+                if(measured>0)report+=String.format(java.util.Locale.US," • approx %.1f fps",measured);
+                android.util.Log.i("OpenFrame",report);
+                return report;
+            }
+        }catch(Exception ex){
+            android.util.Log.w("OpenFrame","Video verification unavailable",ex);
+        }finally{extractor.release();}
+        return "Video recorded • frame rate not measurable";
+    }
     private void openReview() {
         if(captureFile==null || !captureFile.exists())return;
         inReview=true;
@@ -1498,7 +1547,7 @@ public final class CameraXEngine implements CameraEngine {
         if(video){
             videoReview.setVisibility(View.VISIBLE);videoReview.setVideoPath(captureFile.getAbsolutePath());
             videoReview.setOnPreparedListener(mp->mp.setLooping(true));videoReview.start();
-            filterLabel.setText("Video review • original colour");
+            filterLabel.setText(verifyRecordedVideo());
         }else{
             imageReview.setVisibility(View.VISIBLE);
             BitmapFactory.Options b=new BitmapFactory.Options();b.inJustDecodeBounds=true;
