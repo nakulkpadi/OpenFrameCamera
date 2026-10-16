@@ -301,6 +301,17 @@ public final class CameraXEngine implements CameraEngine {
         root.addView(quickPanel, optionsParams);
         quickPanel.setVisibility(View.GONE);
 
+        // Independent settings overlay; keeps video controls visible and legible.
+        videoSettingsPanel = new LinearLayout(activity);
+        videoSettingsPanel.setOrientation(LinearLayout.VERTICAL);
+        videoSettingsPanel.setPadding(dp(13),dp(13),dp(13),dp(13));
+        videoSettingsPanel.setBackground(background(0xF122252B,28,0x665A5E63));
+        FrameLayout.LayoutParams settingsPosition = new FrameLayout.LayoutParams(-1,-2,Gravity.TOP);
+        settingsPosition.setMargins(dp(13),dp(84),dp(13),0);
+        root.addView(videoSettingsPanel,settingsPosition);
+        videoSettingsPanel.setElevation(dp(9));
+        videoSettingsPanel.setVisibility(View.GONE);
+
         bottomPanel = new LinearLayout(activity);
         bottomPanel.setOrientation(LinearLayout.VERTICAL);
         bottomPanel.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -440,48 +451,58 @@ public final class CameraXEngine implements CameraEngine {
 
         morePanel = new LinearLayout(activity);
         morePanel.setOrientation(LinearLayout.VERTICAL);
-        morePanel.setPadding(dp(16), dp(16), dp(16), dp(18));
-        morePanel.setBackground(background(0xF0202225, 24, 0x664B4C50));
-        FrameLayout.LayoutParams moreParams = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        moreParams.setMargins(dp(15), 0, dp(15), dp(160));
-        root.addView(morePanel, moreParams);
+        morePanel.setPadding(dp(18),dp(20),dp(18),dp(18));
+        morePanel.setBackground(background(0xF0202329,30,0x775A5F66));
+        morePanel.setElevation(dp(12));
+        FrameLayout.LayoutParams moreParams=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
+        moreParams.setMargins(dp(14),0,dp(14),dp(154));
+        root.addView(morePanel,moreParams);
         morePanel.setVisibility(View.GONE);
-        TextView moreTitle = text("CAMERA TOOLS   •   OpenFrame", 12, true);
+        TextView moreTitle=text("CAMERA TOOLS  •  OpenFrame",16,true);
         moreTitle.setTextColor(ACCENT);
-        morePanel.addView(moreTitle, new LinearLayout.LayoutParams(-1, dp(30)));
-        LinearLayout toolsRow = new LinearLayout(activity);
+        moreTitle.setGravity(Gravity.CENTER);
+        morePanel.addView(moreTitle,new LinearLayout.LayoutParams(-1,dp(38)));
+        LinearLayout toolsRow=new LinearLayout(activity);
         toolsRow.setGravity(Gravity.CENTER);
-        TextView aspectTool = roundAction("▣  Ratio", "Choose crop framing", v -> { morePanel.setVisibility(View.GONE); showAspectOptions(); });
-        TextView flashTool = roundAction("⚡  Flash", "Choose flash option", v -> {morePanel.setVisibility(View.GONE); showFlashOptions();});
-        TextView gridTool = roundAction("▦  Grid", "Toggle composition grid", v -> {
+        addToolCell(toolsRow,"▣  Ratio",()->{morePanel.setVisibility(View.GONE);showAspectOptions();});
+        addToolCell(toolsRow,"⚡  Flash",()->{morePanel.setVisibility(View.GONE);showFlashOptions();});
+        addToolCell(toolsRow,"▦  Grid",()->{
             morePanel.setVisibility(View.GONE);
-            gridEnabled = !gridEnabled; grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
-            gridButton.setText(gridEnabled ? "▦" : "▤");
+            gridEnabled=!gridEnabled;
+            grid.setVisibility(gridEnabled?View.VISIBLE:View.GONE);
+            gridButton.setText(gridEnabled?"▦":"▤");
         });
-        toolsRow.addView(aspectTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
-        toolsRow.addView(flashTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
-        toolsRow.addView(gridTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
-        morePanel.addView(toolsRow);
-        TextView videoTools=roundAction("▣   Video resolution / frame rate",
-            "Open video recording settings",v->{morePanel.setVisibility(View.GONE);showVideoSettings();});
-        morePanel.addView(videoTools,new LinearLayout.LayoutParams(-1,dp(50)));
-        TextView extensionsText = text("DEVICE CAMERA EXTENSIONS", 11, true);
-        extensionsText.setTextColor(0xFFAEB4BA);
-        morePanel.addView(extensionsText, new LinearLayout.LayoutParams(-1, dp(35)));
-        LinearLayout extRow = new LinearLayout(activity);
+        LinearLayout.LayoutParams topRowParams=new LinearLayout.LayoutParams(-1,dp(63));
+        topRowParams.topMargin=dp(8);
+        morePanel.addView(toolsRow,topRowParams);
+        TextView videoTool=premiumTool("▣   Video resolution / frame rate   ›",14,()->{
+            morePanel.setVisibility(View.GONE);
+            if(mode!=Mode.VIDEO) setMode(Mode.VIDEO);
+            if(mode==Mode.VIDEO) showVideoSettings();
+        });
+        LinearLayout.LayoutParams vidParams=new LinearLayout.LayoutParams(-1,dp(60));
+        vidParams.topMargin=dp(12);
+        morePanel.addView(videoTool,vidParams);
+        LinearLayout heading=new LinearLayout(activity);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        View leftRule=new View(activity);leftRule.setBackgroundColor(0x55575E67);
+        heading.addView(leftRule,new LinearLayout.LayoutParams(0,dp(1),1f));
+        TextView extensionsText=text("DEVICE CAMERA EXTENSIONS",10,true);
+        extensionsText.setTextColor(0xFFB6BBC4);
+        extensionsText.setPadding(dp(9),0,dp(9),0);
+        heading.addView(extensionsText,new LinearLayout.LayoutParams(-2,dp(35)));
+        View rightRule=new View(activity);rightRule.setBackgroundColor(0x55575E67);
+        heading.addView(rightRule,new LinearLayout.LayoutParams(0,dp(1),1f));
+        LinearLayout.LayoutParams headingParams=new LinearLayout.LayoutParams(-1,dp(46));
+        headingParams.topMargin=dp(10);
+        morePanel.addView(heading,headingParams);
+        LinearLayout extRow=new LinearLayout(activity);
         extRow.setGravity(Gravity.CENTER);
-        for (Mode ext : new Mode[]{Mode.NIGHT, Mode.PORTRAIT, Mode.HDR}) {
-            TextView extButton = roundAction(ext.name(), ext.name() + " camera extension", v -> {
-                morePanel.setVisibility(View.GONE); setMode(ext);
-            });
-            extRow.addView(extButton, new LinearLayout.LayoutParams(0, dp(52), 1f));
-        }
-        morePanel.addView(extRow);
-        TextView disclaimer = text("Pro RAW • Panorama • Time-lapse • 4K/60: planned, not yet implemented", 11, false);
-        disclaimer.setTextColor(0xFFB3B8BD);
-        disclaimer.setPadding(dp(6),dp(10),dp(6),0);
-        morePanel.addView(disclaimer, new LinearLayout.LayoutParams(-1, dp(54)));
-                // Editor is only visible after an actual capture; edits are applied at JPEG finalization.
+        addToolCell(extRow,"☾  NIGHT",()->{morePanel.setVisibility(View.GONE);setMode(Mode.NIGHT);});
+        addToolCell(extRow,"◉  PORTRAIT",()->{morePanel.setVisibility(View.GONE);setMode(Mode.PORTRAIT);});
+        addToolCell(extRow,"▣  HDR",()->{morePanel.setVisibility(View.GONE);setMode(Mode.HDR);});
+        morePanel.addView(extRow,new LinearLayout.LayoutParams(-1,dp(65)));
+        // Editor is only visible after an actual capture; edits are applied at JPEG finalization.
         imageReview = new ImageView(activity); imageReview.setBackgroundColor(Color.BLACK);
         imageReview.setScaleType(ImageView.ScaleType.FIT_CENTER); imageReview.setVisibility(View.GONE);
         root.addView(imageReview,new FrameLayout.LayoutParams(-1,-1));
@@ -590,6 +611,7 @@ public final class CameraXEngine implements CameraEngine {
     private void toggleMorePanel() {
         if(morePanel==null||inReview)return;
         quickPanel.setVisibility(View.GONE);
+        if(videoSettingsPanel!=null)videoSettingsPanel.setVisibility(View.GONE);
         if(morePanel.getVisibility()==View.VISIBLE)morePanel.setVisibility(View.GONE);
         else {morePanel.setAlpha(0);morePanel.setVisibility(View.VISIBLE);
             morePanel.animate().alpha(1f).setDuration(180).start();}
@@ -658,28 +680,96 @@ public final class CameraXEngine implements CameraEngine {
         } catch(RuntimeException ignored){}
         return false;
     }
-    private void showVideoSettings() {
-        if(mode!=Mode.VIDEO){show("Video settings available in Video mode");return;}
-        if(isRecording||busy){show("Stop recording to change video settings");return;}
-        showOptions(new String[]{"720p","1080p","4K","30fps","60fps"},choice->{
-            if(choice.endsWith("fps")){
-                int requested="60fps".equals(choice)?60:30;
-                if(!supportsFps(requested)){
-                    show(requested+"fps unavailable on this lens");return;
-                }
-                videoFps=requested;
-            } else {
-                Quality q="4K".equals(choice)?Quality.UHD:
-                    "720p".equals(choice)?Quality.HD:Quality.FHD;
-                if(!supportsVideoQuality(q)){
-                    show(choice+" recording unsupported on selected camera");return;
-                }
-                videoQuality=q;
-            }
-            videoBindRecoveryAttempted=false;
-            updateAspectUi();bindCamera();
-            show("Video target: "+qualityName()+" @ "+videoFps+"fps (actual depends on device)");
+    private TextView premiumTool(String label,int size,Runnable click) {
+        TextView button=text(label,size,false);
+        button.setPadding(dp(9),dp(7),dp(9),dp(7));
+        button.setTextColor(Color.WHITE);
+        button.setBackground(background(0xC12F343C,26,0x77575D66));
+        button.setOnClickListener(v->click.run());
+        return button;
+    }
+    private void addToolCell(LinearLayout parent,String label,Runnable action) {
+        TextView button=premiumTool(label,13,action);
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1f);
+        lp.setMargins(dp(3),0,dp(3),0);
+        parent.addView(button,lp);
+    }
+    private void closePopups() {
+        if(quickPanel!=null)quickPanel.setVisibility(View.GONE);
+        if(morePanel!=null)morePanel.setVisibility(View.GONE);
+        if(videoSettingsPanel!=null)videoSettingsPanel.setVisibility(View.GONE);
+        if(detailControls!=null)detailControls.setVisibility(View.GONE);
+    }
+    private void videoChoice(LinearLayout row,String label,boolean active,boolean supported,Runnable callback) {
+        TextView option=text(label,15,active);
+        option.setTextColor(!supported?0xFF85898F:active?ACCENT:Color.WHITE);
+        option.setAlpha(supported?1f:0.6f);
+        option.setBackground(background(active?0x442D2622:0x00000000,13,0));
+        option.setContentDescription(label+(supported?"":" unavailable on current camera"));
+        option.setOnClickListener(v->{
+            if(!supported)show(label+" recording is not supported by this camera");
+            else callback.run();
         });
+        row.addView(option,new LinearLayout.LayoutParams(0,dp(45),1f));
+    }
+    private LinearLayout videoRow(String heading) {
+        LinearLayout row=new LinearLayout(activity);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView label=text(heading,13,false);
+        label.setGravity(Gravity.CENTER_VERTICAL);
+        label.setTextColor(0xFFB5B8C0);
+        row.addView(label,new LinearLayout.LayoutParams(dp(83),dp(45)));
+        return row;
+    }
+    private void setVideoQuality(Quality candidate) {
+        if(!supportsVideoQuality(candidate)){show("Selected video quality unavailable");return;}
+        videoQuality=candidate;
+        videoBindRecoveryAttempted=false;
+        bindCamera();
+        renderVideoSettings();
+        show("Video • "+qualityName()+" / "+videoFps+"fps target");
+    }
+    private void setVideoFps(int candidate) {
+        if(!supportsFps(candidate)){show(candidate+"fps unsupported by camera");return;}
+        videoFps=candidate;
+        videoBindRecoveryAttempted=false;
+        bindCamera();
+        renderVideoSettings();
+        show("Video • "+qualityName()+" / "+videoFps+"fps target");
+    }
+    private void renderVideoSettings() {
+        if(videoSettingsPanel==null)return;
+        videoSettingsPanel.removeAllViews();
+        LinearLayout resolutions=videoRow("Resolution");
+        videoChoice(resolutions,"720p",videoQuality==Quality.HD,supportsVideoQuality(Quality.HD),
+            ()->setVideoQuality(Quality.HD));
+        videoChoice(resolutions,"1080p",videoQuality==Quality.FHD,supportsVideoQuality(Quality.FHD),
+            ()->setVideoQuality(Quality.FHD));
+        videoChoice(resolutions,"4K",videoQuality==Quality.UHD,supportsVideoQuality(Quality.UHD),
+            ()->setVideoQuality(Quality.UHD));
+        // CameraX currently has no separate 8K quality constant. Never claim 8K output.
+        videoChoice(resolutions,"8K",false,false,()->{});
+        videoSettingsPanel.addView(resolutions,new LinearLayout.LayoutParams(-1,dp(48)));
+        LinearLayout fps=videoRow("Frame rate");
+        videoChoice(fps,"30fps",videoFps==30,supportsFps(30),()->setVideoFps(30));
+        videoChoice(fps,"60fps",videoFps==60,supportsFps(60),()->setVideoFps(60));
+        fps.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(45),2f));
+        videoSettingsPanel.addView(fps,new LinearLayout.LayoutParams(-1,dp(48)));
+    }
+    private void showVideoSettings() {
+        if(mode!=Mode.VIDEO){show("Switch to Video mode to change recording settings");return;}
+        if(isRecording||busy){show("Stop recording to change video settings");return;}
+        if(morePanel!=null)morePanel.setVisibility(View.GONE);
+        if(quickPanel!=null)quickPanel.setVisibility(View.GONE);
+        if(videoSettingsPanel.getVisibility()==View.VISIBLE){
+            videoSettingsPanel.setVisibility(View.GONE);
+            return;
+        }
+        renderVideoSettings();
+        videoSettingsPanel.setAlpha(0f);
+        videoSettingsPanel.setTranslationY(-dp(10));
+        videoSettingsPanel.setVisibility(View.VISIBLE);
+        videoSettingsPanel.animate().alpha(1f).translationY(0f).setDuration(180).start();
     }
     private void showPhotoFormats() {
         if(mode!=Mode.PHOTO){show("JPEG is used by this camera mode");return;}
@@ -799,9 +889,7 @@ public final class CameraXEngine implements CameraEngine {
                 show(next.name()+" unavailable on this device / lens"); return;
             }
         }
-        if (quickPanel != null) quickPanel.setVisibility(View.GONE);
-        if (morePanel != null) morePanel.setVisibility(View.GONE);
-        if (detailControls != null) detailControls.setVisibility(View.GONE);
+        closePopups();
         if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
         if (next == Mode.VIDEO && mode != Mode.VIDEO) videoBindRecoveryAttempted=false;
         if (next != Mode.HDR) { hdrUltraFallback=false; ultraHdrCapture=false; }
@@ -1081,6 +1169,7 @@ public final class CameraXEngine implements CameraEngine {
         inReview=true;
         viewfinder.setVisibility(View.INVISIBLE);grid.setVisibility(View.GONE);
         topControls.setVisibility(View.GONE);bottomPanel.setVisibility(View.GONE);
+        closePopups();
         reviewBar.setVisibility(View.VISIBLE);
         boolean video=captureFile.getName().endsWith(".mp4");
         boolean preserveSensorData=rawCaptureFile!=null || ultraHdrCapture;
@@ -1152,6 +1241,7 @@ public final class CameraXEngine implements CameraEngine {
     }
     @Override public boolean onBackPressed() {
         if(isRecording)return true;
+        if(videoSettingsPanel!=null&&videoSettingsPanel.getVisibility()==View.VISIBLE){videoSettingsPanel.setVisibility(View.GONE);return true;}
         if(morePanel!=null&&morePanel.getVisibility()==View.VISIBLE){morePanel.setVisibility(View.GONE);return true;}
         if(quickPanel!=null&&quickPanel.getVisibility()==View.VISIBLE){quickPanel.setVisibility(View.GONE);return true;}
         if(inReview){retake();return true;}
