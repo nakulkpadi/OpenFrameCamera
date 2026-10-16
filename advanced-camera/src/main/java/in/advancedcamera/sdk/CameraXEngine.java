@@ -38,6 +38,10 @@ import androidx.camera.core.CameraControl;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
+import androidx.camera.core.DynamicRange;
+import android.graphics.ImageFormat;
+import android.util.Range;
+import java.util.concurrent.atomic.AtomicInteger;
 import androidx.camera.core.Preview;
 import androidx.camera.core.ZoomState;
 import androidx.camera.extensions.ExtensionMode;
@@ -439,6 +443,9 @@ public final class CameraXEngine implements CameraEngine {
         toolsRow.addView(flashTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
         toolsRow.addView(gridTool, new LinearLayout.LayoutParams(0, dp(56), 1f));
         morePanel.addView(toolsRow);
+        TextView videoTools=roundAction("▣   Video resolution / frame rate",
+            "Open video recording settings",v->{morePanel.setVisibility(View.GONE);showVideoSettings();});
+        morePanel.addView(videoTools,new LinearLayout.LayoutParams(-1,dp(50)));
         TextView extensionsText = text("DEVICE CAMERA EXTENSIONS", 11, true);
         extensionsText.setTextColor(0xFFAEB4BA);
         morePanel.addView(extensionsText, new LinearLayout.LayoutParams(-1, dp(35)));
@@ -598,6 +605,73 @@ public final class CameraXEngine implements CameraEngine {
         shutterControl.setContentDescription(mode==Mode.VIDEO?
             (isRecording?"Stop video recording":"Start video recording"):"Take photo");
     }
+
+    private String qualityName() {
+        return videoQuality == Quality.UHD ? "4K" : videoQuality == Quality.HD ? "720p" : "1080p";
+    }
+    private CameraSelector baseSelector() {
+        return facing == CameraSelector.LENS_FACING_FRONT ?
+            CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA;
+    }
+    private boolean supportsImageFormat(int outputFormat) {
+        if(provider==null)return false;
+        try {
+            return ImageCapture.getImageCaptureCapabilities(provider.getCameraInfo(baseSelector()))
+                .getSupportedOutputFormats().contains(outputFormat);
+        } catch(RuntimeException ex) {android.util.Log.w("OpenFrame","Image format query failed",ex);return false;}
+    }
+    private boolean supportsVideoQuality(Quality quality) {
+        if(provider==null)return false;
+        try {
+            return Recorder.getVideoCapabilities(provider.getCameraInfo(baseSelector()))
+                .getSupportedQualities(DynamicRange.SDR).contains(quality);
+        } catch(RuntimeException ex) {return false;}
+    }
+    private boolean supportsFps(int rate) {
+        if(provider==null)return false;
+        try {
+            for(Range<Integer> r:provider.getCameraInfo(baseSelector()).getSupportedFrameRateRanges()) {
+                if(r.getLower()<=rate && r.getUpper()>=rate)return true;
+            }
+        } catch(RuntimeException ignored){}
+        return false;
+    }
+    private void showVideoSettings() {
+        if(mode!=Mode.VIDEO){show("Video settings available in Video mode");return;}
+        if(isRecording||busy){show("Stop recording to change video settings");return;}
+        showOptions(new String[]{"720p","1080p","4K","30fps","60fps"},choice->{
+            if(choice.endsWith("fps")){
+                int requested="60fps".equals(choice)?60:30;
+                if(!supportsFps(requested)){
+                    show(requested+"fps unavailable on this lens");return;
+                }
+                videoFps=requested;
+            } else {
+                Quality q="4K".equals(choice)?Quality.UHD:
+                    "720p".equals(choice)?Quality.HD:Quality.FHD;
+                if(!supportsVideoQuality(q)){
+                    show(choice+" recording unsupported on selected camera");return;
+                }
+                videoQuality=q;
+            }
+            updateAspectUi();bindCamera();
+            show("Video target: "+qualityName()+" @ "+videoFps+"fps (actual depends on device)");
+        });
+    }
+    private void showPhotoFormats() {
+        if(mode!=Mode.PHOTO){show("JPEG is used by this camera mode");return;}
+        if(session.request().purpose==CameraRequest.Purpose.TENANT_PHOTO){
+            show("Tenant photographs must remain JPEG");return;
+        }
+        showOptions(new String[]{"JPG","RAW DNG"},choice->{
+            if("RAW DNG".equals(choice)&&!supportsImageFormat(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)){
+                show("RAW DNG is not available on selected lens");return;
+            }
+            photoFormat="RAW DNG".equals(choice)?PhotoFormat.RAW:PhotoFormat.JPEG;
+            bindCamera();updateAspectUi();
+            show(photoFormat==PhotoFormat.RAW?"RAW DNG • original sensor data, editing disabled":"JPEG • filters and edits supported");
+        });
+    }
     private String aspectLabel() {
         switch (selectedAspect) {
             case THREE_FOUR: return "3:4";
@@ -689,9 +763,16 @@ public final class CameraXEngine implements CameraEngine {
         if(busy || isRecording || inReview) return;
         if (next==Mode.VIDEO && session.request().purpose==CameraRequest.Purpose.TENANT_PHOTO) return;
         if(next!=Mode.PHOTO && next!=Mode.VIDEO) {
+            if(next==Mode.HDR && (extensions==null ||
+               !extensions.isExtensionAvailable(baseSelector(), ExtensionMode.HDR)) &&
+               supportsImageFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)){
+                hdrUltraFallback=true;
+            } else {
+                hdrUltraFallback=false;
+            }
             int extension = extensionMode(next);
             CameraSelector selector = facing==CameraSelector.LENS_FACING_FRONT?CameraSelector.DEFAULT_FRONT_CAMERA:CameraSelector.DEFAULT_BACK_CAMERA;
-            if(extensions==null || !extensions.isExtensionAvailable(selector,extension)) {
+            if(!hdrUltraFallback && (extensions==null || !extensions.isExtensionAvailable(selector,extension))) {
                 show(next.name()+" unavailable on this device / lens"); return;
             }
         }
@@ -700,6 +781,7 @@ public final class CameraXEngine implements CameraEngine {
         if (detailControls != null) detailControls.setVisibility(View.GONE);
         if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
         mode=next;
+        if(mode!=Mode.PHOTO && session.request().format!=CameraRequest.Format.RAW) photoFormat=PhotoFormat.JPEG;
         refreshModeChips();
         updateAspectUi();
         updateFlashUi();
