@@ -1,6 +1,6 @@
 # OpenFrame Camera — Android camera app + embeddable SDK
 
-**Status: source release candidate `0.1.0`, NOT device-tested.** OpenFrame is an **original**, independent Android camera implementation inspired by useful interaction patterns seen in premium smartphone cameras. No OEM proprietary code, binaries, shaders, art, or models are included. The original reference APK is deliberately excluded from this repository.
+**Status: `0.2.0-beta` — GitHub CI builds run; on-device validation in progress.** OpenFrame is an **original**, independent Android camera implementation inspired by useful interaction patterns seen in premium smartphone cameras. No OEM proprietary code, binaries, shaders, art, or models are included. The original reference APK is deliberately excluded from this repository.
 
 ## What you get
 
@@ -17,20 +17,22 @@
 |---|---|---|
 | Fullscreen live preview, back/front switch | Yes | Requires runtime Camera permission + CameraX device support |
 | JPEG photo capture | Yes | Private cache; reviewed before returning |
-| HD video recording | Yes | Microphone audio only if RECORD_AUDIO already granted; otherwise silent |
+| HD / FHD / 4K video + requested 30/60 fps | Conditional | Selectable quality must be reported by the chosen lens, and requested fps is a CameraX hint, not a guaranteed measured output |
 | Pinch zoom + slider | Yes | CameraX zoom limits depend on device |
-| Tap-to-focus, auto-exposure compensation slider | Yes | Device-dependent |
+| Tap-to-focus with animated focus reticle; auto-exposure compensation | Yes | Actual focus result and EV range depend on lens |
 | 0 / 3 / 10 second timer, thirds grid | Yes | Timer does not persist through activity stop |
 | Flash Auto / On / Off (photo) | Yes | Flash availability depends on device |
 | Photo review, retake, confirm | Yes | Cancel does not return media |
 | Review filters: Natural / Mono / Warm / Cool / Vivid | Yes | Output processing, not live preview LUTs |
 | Brightness adjustment | Yes | Output processing; no face reshaping |
 | Crops: 3:4, 4:3, square, original | Yes | Center crop at confirmation; preview remains uncropped |
-| OEM Night / HDR / Bokeh | Conditional | CameraX Extensions only when provider exposes them; **not** OnePlus algorithms |
+| OEM Night / Portrait | Conditional | CameraX Extensions only when provider exposes them; not OnePlus algorithms |
+| HDR stills | Conditional | Uses OEM HDR extension where exposed; otherwise Ultra HDR JPEG_R when supported. JPEG_R is returned unmodified to preserve gain map; editing/crop is disabled in that mode |
 | Tenant 3:4 JPEG preset, up to 2 MB, GPS-free | Yes | Image recompressed, orientation normalized |
 | `content://` URI result, cancel/error statuses | Yes | Host ingests into its own encrypted storage |
-| 4K, manual ISO/shutter, RAW/DNG, advanced EIS, multi-frame HDR, face beauty/segmentation, AI editing | **No** | Planned; do not represent these as supported |
-| Working APK / AAR or device compatibility confirmed | **No** | Requires Gradle build and physical-device testing |
+| JPEG / RAW DNG | Conditional | RAW uses CameraX 1.5 RAW+JPEG on supported lenses, returns original DNG, and uses a temporary JPEG only for review; unavailable modes show an explanatory message |
+| Manual ISO/shutter, advanced EIS, multi-frame fusion, face beauty/segmentation, AI editing | **No** | Planned; do not represent these as supported |
+| Compiled APK / AAR | **Yes** | GitHub CI produces both; physical-device capability and image-quality testing is still required |
 
 ## Build
 
@@ -41,7 +43,7 @@ Requirements: **Android Studio**, JDK 17, Android SDK Platform 35, Android Gradl
 3. Install the camera-app debug APK on an Android 8+ phone and test the listed flows.
 4. Build and run `:integration-example` to verify WebView file input capture + gallery input.
 
-No wrapper binary is included because this environment lacks a verified Gradle wrapper JAR. Android Studio can use a locally installed Gradle 8.9 distribution; alternatively install Gradle and generate a wrapper using `gradle wrapper --gradle-version 8.9`. CI installs Gradle automatically.
+No wrapper binary is included in this early source package; Android Studio can use an installed Gradle distribution. Android Studio can use a locally installed Gradle 8.9 distribution; alternatively install Gradle and generate a wrapper using `gradle wrapper --gradle-version 8.9`. CI installs Gradle automatically.
 
 ## Java API
 
@@ -71,7 +73,7 @@ void takePortrait() { camera.launch(CameraRequest.tenantPhoto()); }
 
 MIT license for **new OpenFrame source**, not the Oplus reference APK, its binaries, or its assets. Read `LICENSE`, `CONTRIBUTING.md`, and `SECURITY.md`. Before publishing, review all code and choose a repository owner. CameraX/AndroidX remain subject to their own licenses.
 
-**Build honesty:** This archive was validated via static checks and Java contract tests where available; an Android build / device run was not performed on the authoring machine because no Android SDK/Gradle installation was found.
+**Build honesty:** GitHub Actions compiles the standalone APK, SDK AAR and Java example. A successful build is not proof of device-dependent RAW, HDR or 60 fps recording support. Test on physical devices before claiming feature equivalence.
 
 
 ## Premium OpenFrame UI (design update)
@@ -97,3 +99,11 @@ neon-blue lens icon. The original high-resolution source remains with the design
 and is not copied from OnePlus. Build this repository's `main` branch through
 GitHub Actions to get the current standalone APK and reusable AAR.
 
+
+## Direct launch and beta testing (0.2.0)
+
+The standalone app opens the camera Activity immediately, with no developer demonstration landing page. A separate capture-result screen appears only after confirmation so users can export media. Embedded hosts still use `AdvancedCamera.register(...)` and do not open any standalone screen.
+
+Use the upper **JPG/RAW** chip in Photo mode to request Adobe DNG capture on lenses exposing RAW+JPEG via CameraX. DNG keeps original sensor data and may contain camera metadata: inspect it before sharing. Sundar Wadi Rent's tenant preset remains JPEG-only. Ultra HDR JPEG_R is saved without recompression; the 3:4/1:1 crop and filters are intentionally unavailable in HDR-pass-through mode. Photo/Video/Portrait switching and 720p/1080p/4K video quality depend on camera capabilities; 30/60 fps is a target, not a verified output frame rate.
+
+**Debug install:** GitHub-hosted CI debug APKs may be signed by different temporary keys per workflow run. If Android rejects an update due to a signature mismatch, back up any files first and uninstall the previous debug version. For distributable releases, use a persistent protected signing key and CI secrets; never commit the release signing key.
