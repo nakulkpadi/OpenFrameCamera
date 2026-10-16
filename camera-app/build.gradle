@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'dev.openframe.app'
     compileSdk 35
-    defaultConfig { applicationId 'dev.openframe.camera'; minSdk 26; targetSdk 34; versionCode 2; versionName '0.2.0-beta' }
+    defaultConfig { applicationId 'dev.openframe.camera'; minSdk 26; targetSdk 34; versionCode 3; versionName '0.2.1-beta' }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 dependencies { implementation project(':advanced-camera') }
