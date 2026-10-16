@@ -773,11 +773,11 @@ public final class CameraXEngine implements CameraEngine {
     private boolean supportsEightK() {
         if(facing != CameraSelector.LENS_FACING_BACK)return false;
         String id=currentCameraId();
-        return id != null && Camera2HighResRecorder.canRecord8K(activity,id);
+        return id != null && Camera2HighResRecorder.canAttempt(activity,id,7680,4320,24);
     }
     private boolean supportsNative4K60() {
         String id=currentCameraId();
-        return id != null && Camera2HighResRecorder.canRecord4K60(activity,id);
+        return id != null && Camera2HighResRecorder.canAttempt(activity,id,3840,2160,60);
     }
     private boolean usesNativeVideoRecorder() {
         return selectedEightK || (videoQuality==Quality.UHD && videoFps==60 &&
@@ -804,6 +804,53 @@ public final class CameraXEngine implements CameraEngine {
         if(selectedEightK)return rate==24 && supportsEightK();
         return supportsVideoFps(videoQuality,rate) ||
             (rate==60 && videoQuality==Quality.UHD && supportsNative4K60());
+    }
+    private void showCameraDiagnostic() {
+        if(provider==null){show("Camera not initialized");return;}
+        StringBuilder info=new StringBuilder("OpenFrame v0.2.4 camera recording capabilities\\n");
+        info.append("Android ").append(android.os.Build.VERSION.SDK_INT)
+            .append(" • Lens ").append(facing==CameraSelector.LENS_FACING_FRONT?"front":"rear").append("\\n");
+        String id=currentCameraId();
+        info.append("Public Camera2 ID: ").append(id==null?"unavailable":id).append("\\n");
+        info.append("Selected: ").append(qualityName()).append(" @ ").append(videoFps).append("fps\\n");
+        info.append("CameraX supports: ");
+        for(Quality q:new Quality[]{Quality.HD,Quality.FHD,Quality.UHD}){
+            info.append(q==Quality.UHD?"4K":q==Quality.FHD?"1080p":"720p");
+            info.append(supportsVideoQuality(q)?" YES":" no").append("; ");
+            if(supportsVideoQuality(q)){
+                info.append("session60=").append(supportsVideoFps(q,60)).append("; ");
+            }
+        }
+        info.append("\\nPublic Camera2 candidate configurations:\\n");
+        if(id!=null){
+            try{
+                CameraManager manager=(CameraManager)activity.getSystemService(android.content.Context.CAMERA_SERVICE);
+                CameraCharacteristics c=manager.getCameraCharacteristics(id);
+                Range<Integer>[] ranges=c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+                info.append("AE ranges: ").append(java.util.Arrays.toString(ranges)).append("\\n");
+                android.hardware.camera2.params.StreamConfigurationMap map=
+                    c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+                if(map!=null){
+                    android.util.Size[] sizes=map.getOutputSizes(android.media.MediaRecorder.class);
+                    info.append("MediaRecorder 4K/8K size: ");
+                    if(sizes!=null)for(android.util.Size z:sizes)
+                        if(z.getWidth()>=3840 && z.getHeight()>=2160)info.append(z).append(" ");
+                    info.append("\\n");
+                }
+            }catch(Exception ex){info.append("Camera2 query error: ").append(ex.getClass().getSimpleName());}
+        }
+        info.append("Camera2 4K60 candidate: ").append(supportsNative4K60()).append("\\n");
+        info.append("Camera2 8K24 candidate: ").append(supportsEightK()).append("\\n");
+        info.append("Note: third-party camera access can differ from the stock camera.");
+        new android.app.AlertDialog.Builder(activity)
+            .setTitle("Camera video capability report")
+            .setMessage(info.toString())
+            .setPositiveButton("Copy report",(dialog,which)->{
+                android.content.ClipboardManager clipboard=
+                    (android.content.ClipboardManager)activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("OpenFrame camera report",info.toString()));
+                show("Capability report copied • paste it in ChatGPT");
+            }).setNegativeButton("Close",null).show();
     }
     private void explainEightK() {
         show("8K requires a public Camera2 7680×4320 stream plus HEVC encoder. "+
@@ -882,14 +929,16 @@ public final class CameraXEngine implements CameraEngine {
     }
     private void setVideoFps(int candidate) {
         if(selectedEightK){show("8K capture uses 24 fps");return;}
-        if(!supportsFps(candidate)){
-            show(candidate+"fps unavailable for "+qualityName()+" in both CameraX and public Camera2");return;
-        }
+        if(candidate!=30 && candidate!=60)return;
+        // The phone's public metadata may under-report FPS combinations. Allow
+        // a guarded real CameraX session trial; never claim 60 without a test MP4.
         videoFps=candidate;
         videoBindRecoveryAttempted=false;
         bindCamera();
         renderVideoSettings();
-        show("Video • "+qualityName()+" / "+videoFps+"fps target");
+        updateAspectUi();
+        if(videoFps==candidate)
+            show("Testing "+qualityName()+" / "+candidate+"fps • verify recorded MP4");
     }
     private void renderVideoSettings() {
         if(videoSettingsPanel==null)return;
@@ -901,7 +950,7 @@ public final class CameraXEngine implements CameraEngine {
             ()->setVideoQuality(Quality.FHD));
         videoChoice(resolutions,"4K",!selectedEightK && videoQuality==Quality.UHD,supportsVideoQuality(Quality.UHD),
             ()->setVideoQuality(Quality.UHD));
-        videoChoice(resolutions,"8K",selectedEightK,supportsEightK(),()->{
+        videoChoice(resolutions,"8K",selectedEightK,true,()->{
             if(!supportsEightK()){explainEightK();return;}
             selectedEightK=true;videoFps=24;
             renderVideoSettings();updateAspectUi();
@@ -915,10 +964,15 @@ public final class CameraXEngine implements CameraEngine {
             videoChoice(fps,"60fps",false,false,()->{});
         }else{
             videoChoice(fps,"30fps",videoFps==30,supportsVideoFps(videoQuality,30),()->setVideoFps(30));
-            videoChoice(fps,"60fps",videoFps==60,supportsFps(60),()->setVideoFps(60));
+            videoChoice(fps,"60fps",videoFps==60,true,()->setVideoFps(60));
         }
         fps.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(45),1f));
         videoSettingsPanel.addView(fps,new LinearLayout.LayoutParams(-1,dp(48)));
+        TextView diagnostics=text("ⓘ  Camera capabilities • Tap to copy report",11,false);
+        diagnostics.setGravity(Gravity.CENTER);
+        diagnostics.setTextColor(0xFFB2B7C1);
+        diagnostics.setOnClickListener(v->showCameraDiagnostic());
+        videoSettingsPanel.addView(diagnostics,new LinearLayout.LayoutParams(-1,dp(32)));
     }
     private void showVideoSettings() {
         if(mode!=Mode.VIDEO){show("Switch to Video mode to change recording settings");return;}
@@ -1189,12 +1243,9 @@ public final class CameraXEngine implements CameraEngine {
                 // for a supported Preview + VideoCapture combination. The old
                 // VideoCapture.setTargetFrameRate() was only a preference.
                 if(!selectedEightK && videoFps==60 && !usesNativeVideoRecorder()){
-                    SessionConfig probe=new SessionConfig.Builder(preview,videoCapture).build();
-                    boolean allowed=false;
-                    for(Range<Integer> range:provider.getCameraInfo(selector).getSupportedFrameRateRanges(probe)){
-                        if(range.getLower()<=60 && range.getUpper()>=60){allowed=true;break;}
-                    }
-                    if(!allowed)throw new IllegalStateException("60fps unavailable for selected CameraX video session");
+                    // Try a real 60fps session instead of rejecting from a
+                    // potentially incomplete capability probe. CameraX may
+                    // reject it; the catch path keeps the previous resolution.
                     SessionConfig config=new SessionConfig.Builder(preview,videoCapture)
                         .setFrameRateRange(new Range<>(60,60)).build();
                     camera=provider.bindToLifecycle(activity,selector,config);
@@ -1246,11 +1297,21 @@ public final class CameraXEngine implements CameraEngine {
         } catch (Exception ex) {
             android.util.Log.e("OpenFrame", "Camera bind failed", ex);
             Mode failed = mode;
-            if(failed == Mode.VIDEO && !videoBindRecoveryAttempted &&
-                (videoFps!=30 || videoQuality!=Quality.HD)){
+            if(failed == Mode.VIDEO && !videoBindRecoveryAttempted && videoFps!=30){
                 videoBindRecoveryAttempted=true;
-                videoFps=30;videoQuality=Quality.HD;
-                show("Video combination unsupported • retrying 720p/30");
+                int rejected=videoFps;
+                videoFps=30;
+                show(qualityName()+"/"+rejected+"fps could not bind • reverting to "+qualityName()+"/30");
+                updateAspectUi();
+                if(videoSettingsPanel!=null&&videoSettingsPanel.getVisibility()==View.VISIBLE)
+                    renderVideoSettings();
+                bindCamera();return;
+            }
+            if(failed == Mode.VIDEO && !videoBindRecoveryAttempted &&
+                videoQuality != Quality.HD){
+                videoBindRecoveryAttempted=true;
+                videoQuality=Quality.HD;
+                show("Selected video quality cannot bind • falling back to 720p/30");
                 bindCamera();return;
             }
             if (failed != Mode.PHOTO) {
@@ -1387,7 +1448,7 @@ public final class CameraXEngine implements CameraEngine {
                     cleanupNativeEightKPreview();
                     if(captureFile!=null)captureFile.delete();
                     if(!destroyed){
-                        show("8K recording unavailable: "+reason);
+                        show((ultra?"8K/24":"4K/60")+" recording unavailable: "+reason);
                         bindCamera();
                     }
                 }
