@@ -616,10 +616,11 @@ public final class CameraXEngine implements CameraEngine {
         if(session.request().purpose==CameraRequest.Purpose.TENANT_PHOTO) {
             show("Resident portrait requires 3:4");return;
         }
-        showOptions(new String[]{"3:4","4:3","1:1","Original"},choice->{
+        showOptions(new String[]{"3:4","4:3","1:1","16:9","Original"},choice->{
             selectedAspect=choice.equals("3:4")?CameraRequest.AspectRatio.THREE_FOUR:
                 choice.equals("4:3")?CameraRequest.AspectRatio.FOUR_THREE:
-                choice.equals("1:1")?CameraRequest.AspectRatio.SQUARE:CameraRequest.AspectRatio.ORIGINAL;
+                choice.equals("1:1")?CameraRequest.AspectRatio.SQUARE:
+                choice.equals("16:9")?CameraRequest.AspectRatio.SIXTEEN_NINE:CameraRequest.AspectRatio.ORIGINAL;
             updateAspectUi();show("Photo crop • "+aspectLabel());
         });
     }
@@ -877,6 +878,7 @@ public final class CameraXEngine implements CameraEngine {
             case THREE_FOUR: return "3:4";
             case FOUR_THREE: return "4:3";
             case SQUARE: return "1:1";
+            case SIXTEEN_NINE: return "16:9";
             default:return "Original";
         }
     }
@@ -895,10 +897,24 @@ public final class CameraXEngine implements CameraEngine {
             videoSettingsButton.setText(qualityName() + "·" + videoFps);
         }
         if (previewStage == null || viewfinder == null || grid == null) return;
+        // 16:9 in Photo mode extends the preview underneath the top and bottom
+        // controls, just like a fullscreen camera preview. Other ratios stay
+        // inside the usual centered preview stage.
+        boolean edgeToEdge = mode != Mode.VIDEO &&
+            selectedAspect == CameraRequest.AspectRatio.SIXTEEN_NINE;
+        FrameLayout.LayoutParams stage=(FrameLayout.LayoutParams)previewStage.getLayoutParams();
+        int insetTop=edgeToEdge?0:dp(82), insetBottom=edgeToEdge?0:dp(190);
+        if(stage.topMargin!=insetTop || stage.bottomMargin!=insetBottom){
+            stage.topMargin=insetTop;stage.bottomMargin=insetBottom;
+            previewStage.setLayoutParams(stage);
+        }
+        if(edgeToEdge){
+            viewfinder.setScaleType(PreviewView.ScaleType.FILL_CENTER);
+        }
         previewStage.post(() -> {
             if (destroyed || previewStage.getWidth() == 0 || previewStage.getHeight() == 0) return;
             int width = previewStage.getWidth(), height = previewStage.getHeight();
-            if (mode != Mode.VIDEO && selectedAspect != CameraRequest.AspectRatio.ORIGINAL) {
+            if (!edgeToEdge && mode != Mode.VIDEO && selectedAspect != CameraRequest.AspectRatio.ORIGINAL) {
                 double aspect = selectedAspect == CameraRequest.AspectRatio.THREE_FOUR ? 0.75
                         : selectedAspect == CameraRequest.AspectRatio.FOUR_THREE ? (4.0 / 3.0) : 1.0;
                 if (width / (double) height > aspect) width = Math.max(1, (int) Math.round(height * aspect));
@@ -918,7 +934,8 @@ public final class CameraXEngine implements CameraEngine {
         switch (selectedAspect) {
             case THREE_FOUR: selectedAspect = CameraRequest.AspectRatio.FOUR_THREE; break;
             case FOUR_THREE: selectedAspect = CameraRequest.AspectRatio.SQUARE; break;
-            case SQUARE: selectedAspect = CameraRequest.AspectRatio.ORIGINAL; break;
+            case SQUARE: selectedAspect = CameraRequest.AspectRatio.SIXTEEN_NINE; break;
+            case SIXTEEN_NINE: selectedAspect = CameraRequest.AspectRatio.ORIGINAL; break;
             default: selectedAspect = CameraRequest.AspectRatio.THREE_FOUR;
         }
         updateAspectUi();
