@@ -47,9 +47,24 @@ final class Camera2HighResRecorder {
 
     private static final String TAG = "OpenFrame8K";
     static final int WIDTH = 7680, HEIGHT = 4320, FPS = 24;
-
+    private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> CAPABILITIES =
+        new java.util.concurrent.ConcurrentHashMap<>();
     static boolean canRecord8K(Context context, String id) {
-        if (android.os.Build.VERSION.SDK_INT < 31 || id == null) return false;
+        return canRecord(context,id,WIDTH,HEIGHT,FPS);
+    }
+    static boolean canRecord4K60(Context context, String id) {
+        return canRecord(context,id,3840,2160,60);
+    }
+    static boolean canRecord(Context context,String id,int width,int height,int fps) {
+        if(id==null || android.os.Build.VERSION.SDK_INT<31)return false;
+        String key=id+":"+width+"x"+height+"@"+fps;
+        Boolean cached=CAPABILITIES.get(key);
+        if(cached!=null)return cached;
+        boolean answer=probe(context,id,width,height,fps);
+        CAPABILITIES.put(key,answer);
+        return answer;
+    }
+    private static boolean probe(Context context, String id,int width,int height,int fps) {
         try {
             CameraManager manager=(CameraManager)context.getSystemService(Context.CAMERA_SERVICE);
             CameraCharacteristics c=manager.getCameraCharacteristics(id);
@@ -58,7 +73,7 @@ final class Camera2HighResRecorder {
             if(map!=null) {
                 Size[] sizes=map.getOutputSizes(MediaRecorder.class);
                 if(sizes!=null)for(Size size:sizes) {
-                    if(size.getWidth()==WIDTH && size.getHeight()==HEIGHT) {
+                    if(size.getWidth()==width && size.getHeight()==height) {
                         sizeAvailable=true;break;
                     }
                 }
@@ -67,7 +82,7 @@ final class Camera2HighResRecorder {
             Range<Integer>[] fps=c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
             boolean fpsAvailable=false;
             if(fps!=null)for(Range<Integer> range:fps) {
-                if(range.getLower()<=FPS && range.getUpper()>=FPS) {
+                if(range.getLower()<=fps && range.getUpper()>=fps) {
                     fpsAvailable=true;break;
                 }
             }
@@ -80,12 +95,12 @@ final class Camera2HighResRecorder {
                     if(!MediaFormat.MIMETYPE_VIDEO_HEVC.equalsIgnoreCase(type))continue;
                     try{
                         MediaCodecInfo.VideoCapabilities caps=codec.getCapabilitiesForType(type).getVideoCapabilities();
-                        if(caps.areSizeAndRateSupported(WIDTH,HEIGHT,FPS))return true;
+                        if(caps.areSizeAndRateSupported(width,height,fps))return true;
                     }catch(RuntimeException ignored){}
                 }
             }
         }catch(Exception error){
-            Log.w(TAG,"8K capability probe failed",error);
+            Log.w(TAG,"Camera2 video capability probe failed",error);
         }
         return false;
     }
@@ -96,6 +111,7 @@ final class Camera2HighResRecorder {
     private final File output;
     private final Listener listener;
     private final boolean microphone;
+    private final int width,height,fps;
     private final Handler main=new Handler(Looper.getMainLooper());
 
     private HandlerThread thread;
@@ -109,18 +125,19 @@ final class Camera2HighResRecorder {
 
     Camera2HighResRecorder(Activity activity, String cameraId,
                             TextureView preview, File output, boolean microphone,
-                            Listener listener){
+                            Listener listener,int width,int height,int fps){
         this.activity=activity;
         this.cameraId=cameraId;
         this.preview=preview;
         this.output=output;
         this.microphone=microphone;
         this.listener=listener;
+        this.width=width;this.height=height;this.fps=fps;
     }
 
     void start(){
-        if(!canRecord8K(activity,cameraId)){
-            main.post(()->listener.onFailure("Android does not expose a compatible 8K/24 Camera2 stream and HEVC encoder"));
+        if(!canRecord(activity,cameraId,width,height,fps)){
+            main.post(()->listener.onFailure("Android does not expose the selected Camera2 stream, frame rate and HEVC encoder"));
             return;
         }
         thread=new HandlerThread("openframe-camera2-8k");
@@ -152,9 +169,9 @@ final class Camera2HighResRecorder {
             recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
             recorder.setVideoEncoder(MediaRecorder.VideoEncoder.HEVC);
-            recorder.setVideoSize(WIDTH,HEIGHT);
-            recorder.setVideoFrameRate(FPS);
-            recorder.setVideoEncodingBitRate(90_000_000);
+            recorder.setVideoSize(width,height);
+            recorder.setVideoFrameRate(fps);
+            recorder.setVideoEncodingBitRate(width>4000?90_000_000:45_000_000);
             if(microphone && ContextCompat.checkSelfPermission(activity,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED){
                 recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
                 recorder.setAudioChannels(1);
@@ -217,7 +234,7 @@ final class Camera2HighResRecorder {
                         if(ranges!=null){
                             Range<Integer> chosen=null;
                             for(Range<Integer> range:ranges){
-                                if(range.getLower()<=FPS&&range.getUpper()>=FPS){
+                                if(range.getLower()<=fps&&range.getUpper()>=fps){
                                     if(chosen==null || (range.getUpper()-range.getLower()) <
                                             (chosen.getUpper()-chosen.getLower())) chosen=range;
                                 }
