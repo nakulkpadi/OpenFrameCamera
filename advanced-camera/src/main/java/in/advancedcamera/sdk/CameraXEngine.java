@@ -52,6 +52,8 @@ import android.graphics.ImageFormat;
 import android.util.Range;
 import java.util.concurrent.atomic.AtomicInteger;
 import androidx.camera.core.Preview;
+import androidx.camera.core.SessionConfig;
+import android.view.TextureView;
 import androidx.camera.core.ZoomState;
 import androidx.camera.extensions.ExtensionMode;
 import androidx.camera.extensions.ExtensionsManager;
@@ -91,7 +93,9 @@ public final class CameraXEngine implements CameraEngine {
     private boolean ultraHdrCapture, hdrUltraFallback, rawSupported;
     private Quality videoQuality = Quality.FHD;
     private int videoFps = 30;
-    private boolean videoBindRecoveryAttempted;
+    private boolean videoBindRecoveryAttempted, selectedEightK;
+    private Camera2HighResRecorder native8KRecorder;
+    private TextureView native8KPreview;
     private static final int ACCENT = 0xFFFF941C;
     private static final int PANEL_BG = 0xF2181A1D;
     private PreviewView viewfinder;
@@ -146,6 +150,7 @@ public final class CameraXEngine implements CameraEngine {
             catch (IllegalArgumentException ignored) {photoFormat = PhotoFormat.JPEG;}
             rawCaptureFile = state.getString("of_rawcapture") == null ? null : new File(state.getString("of_rawcapture"));
             videoFps = state.getInt("of_video_fps", 30);
+            selectedEightK = state.getBoolean("of_native_8k", false);
             String quality = state.getString("of_video_quality", "FHD");
             videoQuality = "UHD".equals(quality) ? Quality.UHD : "HD".equals(quality) ? Quality.HD : Quality.FHD;
             timerSeconds = state.getInt("of_timer", 0);
@@ -739,7 +744,8 @@ public final class CameraXEngine implements CameraEngine {
     }
 
     private String qualityName() {
-        return videoQuality == Quality.UHD ? "4K" : videoQuality == Quality.HD ? "720p" : "1080p";
+        return selectedEightK ? "8K" : videoQuality == Quality.UHD ? "4K" :
+            videoQuality == Quality.HD ? "720p" : "1080p";
     }
     private CameraSelector baseSelector() {
         return facing == CameraSelector.LENS_FACING_FRONT ?
@@ -759,37 +765,40 @@ public final class CameraXEngine implements CameraEngine {
                 .getSupportedQualities(DynamicRange.SDR).contains(quality);
         } catch(RuntimeException ex) {return false;}
     }
-    private boolean supportsFps(int rate) {
-        if(provider==null)return false;
+    private String currentCameraId() {
+        if(provider==null)return null;
+        try{return Camera2CameraInfo.from(provider.getCameraInfo(baseSelector())).getCameraId();}
+        catch(RuntimeException ex){return null;}
+    }
+    private boolean supportsEightK() {
+        if(facing != CameraSelector.LENS_FACING_BACK)return false;
+        String id=currentCameraId();
+        return id != null && Camera2HighResRecorder.canRecord8K(activity,id);
+    }
+    private SessionConfig probeSession(Quality q) {
+        Preview preview=new Preview.Builder().build();
+        Recorder recorder=new Recorder.Builder().setQualitySelector(QualitySelector.from(q)).build();
+        VideoCapture<Recorder> video=VideoCapture.withOutput(recorder);
+        return new SessionConfig.Builder(preview,video).build();
+    }
+    private boolean supportsVideoFps(Quality q,int rate) {
+        if(provider==null || !supportsVideoQuality(q))return false;
         try {
             androidx.camera.core.CameraInfo info=provider.getCameraInfo(baseSelector());
-            for(Range<Integer> r:info.getSupportedFrameRateRanges()) {
-                if(r.getLower()<=rate && r.getUpper()>=rate)return true;
+            SessionConfig probe=probeSession(q);
+            for(Range<Integer> r:info.getSupportedFrameRateRanges(probe)) {
+                if(r.getLower()<=rate&&r.getUpper()>=rate)return true;
             }
-            // OEM camera apps often expose 60fps through Camera2 even when
-            // CameraX preview's generic ranges are limited to 30fps.
-            Camera2CameraInfo two=Camera2CameraInfo.from(info);
-            Range<Integer>[] ranges=two.getCameraCharacteristic(
-                CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
-            if(ranges!=null)for(Range<Integer> r:ranges){
-                if(r.getLower()<=rate && r.getUpper()>=rate)return true;
-            }
-        }catch(Exception ex){android.util.Log.w("OpenFrame","FPS capabilities unavailable",ex);}
+        }catch(Exception ex){android.util.Log.w("OpenFrame","Session FPS probe failed",ex);}
         return false;
     }
-    private boolean reportsEightKProfile() {
-        if(provider==null || android.os.Build.VERSION.SDK_INT<31)return false;
-        try {
-            String id=Camera2CameraInfo.from(provider.getCameraInfo(baseSelector())).getCameraId();
-            int numericId=Integer.parseInt(id);
-            return android.media.CamcorderProfile.hasProfile(
-                numericId, android.media.CamcorderProfile.QUALITY_8KUHD);
-        }catch(Exception ignored){return false;}
+    private boolean supportsFps(int rate) {
+        if(selectedEightK)return rate==24 && supportsEightK();
+        return supportsVideoFps(videoQuality,rate);
     }
     private void explainEightK() {
-        show(reportsEightKProfile()
-            ? "This lens reports 8K to Android. OpenFrame needs a Camera2 8K encoder; CameraX supports up to 4K here."
-            : "8K recording is not exposed through OpenFrame's CameraX backend on this lens.");
+        show("8K requires a public Camera2 7680×4320 stream plus HEVC encoder. "+
+            "The OnePlus stock camera may use private OEM profiles unavailable to third-party apps.");
     }
     private TextView premiumTool(String label,int size,Runnable click) {
         TextView button=text(label,size,false);
@@ -854,14 +863,19 @@ public final class CameraXEngine implements CameraEngine {
     }
     private void setVideoQuality(Quality candidate) {
         if(!supportsVideoQuality(candidate)){show("Selected video quality unavailable");return;}
+        selectedEightK=false;
         videoQuality=candidate;
+        if(!supportsVideoFps(candidate,videoFps))videoFps=30;
         videoBindRecoveryAttempted=false;
         bindCamera();
         renderVideoSettings();
         show("Video • "+qualityName()+" / "+videoFps+"fps target");
     }
     private void setVideoFps(int candidate) {
-        if(!supportsFps(candidate)){show(candidate+"fps unsupported by camera");return;}
+        if(selectedEightK){show("8K capture uses 24 fps");return;}
+        if(!supportsVideoFps(videoQuality,candidate)){
+            show(candidate+"fps unavailable for "+qualityName()+" through CameraX");return;
+        }
         videoFps=candidate;
         videoBindRecoveryAttempted=false;
         bindCamera();
@@ -872,20 +886,29 @@ public final class CameraXEngine implements CameraEngine {
         if(videoSettingsPanel==null)return;
         videoSettingsPanel.removeAllViews();
         LinearLayout resolutions=videoRow("Resolution");
-        videoChoice(resolutions,"720p",videoQuality==Quality.HD,supportsVideoQuality(Quality.HD),
+        videoChoice(resolutions,"720p",!selectedEightK && videoQuality==Quality.HD,supportsVideoQuality(Quality.HD),
             ()->setVideoQuality(Quality.HD));
-        videoChoice(resolutions,"1080p",videoQuality==Quality.FHD,supportsVideoQuality(Quality.FHD),
+        videoChoice(resolutions,"1080p",!selectedEightK && videoQuality==Quality.FHD,supportsVideoQuality(Quality.FHD),
             ()->setVideoQuality(Quality.FHD));
-        videoChoice(resolutions,"4K",videoQuality==Quality.UHD,supportsVideoQuality(Quality.UHD),
+        videoChoice(resolutions,"4K",!selectedEightK && videoQuality==Quality.UHD,supportsVideoQuality(Quality.UHD),
             ()->setVideoQuality(Quality.UHD));
-        // Visible for discovery, but tapping explains why stock-app 8K may
-        // be unavailable. Never save 4K while displaying an 8K indicator.
-        videoChoice(resolutions,"8K",false,true,()->explainEightK());
+        videoChoice(resolutions,"8K",selectedEightK,supportsEightK(),()->{
+            if(!supportsEightK()){explainEightK();return;}
+            selectedEightK=true;videoFps=24;
+            renderVideoSettings();updateAspectUi();
+            show("8K / 24fps Camera2 HEVC recording • test output on device");
+        });
         videoSettingsPanel.addView(resolutions,new LinearLayout.LayoutParams(-1,dp(48)));
         LinearLayout fps=videoRow("Frame rate");
-        videoChoice(fps,"30fps",videoFps==30,supportsFps(30),()->setVideoFps(30));
-        videoChoice(fps,"60fps",videoFps==60,supportsFps(60),()->setVideoFps(60));
-        fps.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(45),2f));
+        if(selectedEightK) {
+            videoChoice(fps,"24fps",true,true,()->show("8K fixed at 24fps"));
+            videoChoice(fps,"30fps",false,false,()->{});
+            videoChoice(fps,"60fps",false,false,()->{});
+        }else{
+            videoChoice(fps,"30fps",videoFps==30,supportsVideoFps(videoQuality,30),()->setVideoFps(30));
+            videoChoice(fps,"60fps",videoFps==60,supportsVideoFps(videoQuality,60),()->setVideoFps(60));
+        }
+        fps.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(45),1f));
         videoSettingsPanel.addView(fps,new LinearLayout.LayoutParams(-1,dp(48)));
     }
     private void showVideoSettings() {
@@ -938,7 +961,7 @@ public final class CameraXEngine implements CameraEngine {
         }
         if (videoSettingsButton != null) {
             videoSettingsButton.setVisibility(mode == Mode.VIDEO ? View.VISIBLE : View.GONE);
-            videoSettingsButton.setText(qualityName() + "·" + videoFps);
+            videoSettingsButton.setText(qualityName() + "·" + (selectedEightK?24:videoFps));
         }
         if (previewStage == null || viewfinder == null || grid == null) return;
         // 16:9 in Photo mode extends the preview underneath the top and bottom
@@ -1040,6 +1063,7 @@ public final class CameraXEngine implements CameraEngine {
         closePopups();
         if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
         if (next == Mode.VIDEO && mode != Mode.VIDEO) videoBindRecoveryAttempted=false;
+        if(next!=Mode.VIDEO)selectedEightK=false;
         if (next != Mode.HDR) { hdrUltraFallback=false; ultraHdrCapture=false; }
         mode=next;
         if(mode!=Mode.PHOTO && session.request().format!=CameraRequest.Format.RAW) photoFormat=PhotoFormat.JPEG;
@@ -1222,7 +1246,11 @@ public final class CameraXEngine implements CameraEngine {
     private void onShutter() {
         if (inReview || busy) return;
         if(mode==Mode.VIDEO) {
-            if(isRecording) {if(recording!=null)recording.stop();updateShutterStyle();}
+            if(isRecording) {
+                if(native8KRecorder!=null)native8KRecorder.stop();
+                else if(recording!=null)recording.stop();
+                updateShutterStyle();
+            }
             else beginVideo();
             return;
         }
@@ -1291,7 +1319,61 @@ public final class CameraXEngine implements CameraEngine {
                 }
             });
     }
+    private void cleanupNativeEightKPreview() {
+        if(native8KPreview!=null){
+            previewStage.removeView(native8KPreview);
+            native8KPreview=null;
+        }
+    }
+    private void beginNativeEightK() {
+        if(native8KRecorder!=null || busy || inReview)return;
+        if(!supportsEightK()){explainEightK();return;}
+        try{captureFile=session.createPrivateCaptureFile(".mp4");}
+        catch(IOException ex){show("Unable to create 8K output");return;}
+        String id=currentCameraId();
+        if(id==null){show("No public Camera2 ID available");captureFile.delete();return;}
+        busy=true;
+        ++bindGeneration; // prevent CameraX preview watchdog during Camera2 handoff
+        provider.unbindAll();
+        camera=null;videoCapture=null;imageCapture=null;
+        native8KPreview=new TextureView(activity);
+        FrameLayout.LayoutParams lp=new FrameLayout.LayoutParams(-1,-1);
+        previewStage.addView(native8KPreview,lp);
+        native8KPreview.bringToFront();
+        native8KRecorder=new Camera2HighResRecorder(activity,id,native8KPreview,captureFile,
+            ContextCompat.checkSelfPermission(activity,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED,
+            new Camera2HighResRecorder.Listener(){
+                @Override public void onRecording(){
+                    if(destroyed)return;
+                    busy=false;isRecording=true;
+                    updateShutterStyle();
+                    show("Recording real 8K • 7680×4320 • 24fps HEVC");
+                }
+                @Override public void onFinished(File output){
+                    native8KRecorder=null;busy=false;isRecording=false;
+                    updateShutterStyle();
+                    cleanupNativeEightKPreview();
+                    if(!destroyed)openReview();
+                }
+                @Override public void onFailure(String reason){
+                    native8KRecorder=null;busy=false;isRecording=false;
+                    updateShutterStyle();
+                    cleanupNativeEightKPreview();
+                    if(captureFile!=null)captureFile.delete();
+                    if(!destroyed){
+                        show("8K recording unavailable: "+reason);
+                        bindCamera();
+                    }
+                }
+            });
+        show("Starting Camera2 8K session…");
+        native8KRecorder.start();
+    }
     private void beginVideo() {
+        if(selectedEightK) {
+            beginNativeEightK();
+            return;
+        }
         if(videoCapture==null){show("Video mode not ready");return;}
         try {captureFile=session.createPrivateCaptureFile(".mp4");}
         catch(IOException e){show("Cannot create video file");return;}
@@ -1378,6 +1460,7 @@ public final class CameraXEngine implements CameraEngine {
         bottomPanel.setVisibility(View.VISIBLE);viewfinder.setVisibility(View.VISIBLE);
         grid.setVisibility(gridEnabled?View.VISIBLE:View.GONE);
         show("Retake • ready");
+        if(provider!=null && mode==Mode.VIDEO && videoCapture==null)bindCamera();
     }
     private void confirm() {
         if(!inReview||captureFile==null)return;
@@ -1407,6 +1490,7 @@ public final class CameraXEngine implements CameraEngine {
         paused = true;
         if (videoReview != null) videoReview.pause();
         if (isRecording && recording != null) recording.stop();
+        if(native8KRecorder!=null)native8KRecorder.stop();
     }
     @Override public void onSaveInstanceState(Bundle out) {
         out.putString("of_mode",mode.name());out.putInt("of_facing",facing);
@@ -1418,11 +1502,13 @@ public final class CameraXEngine implements CameraEngine {
         out.putString("of_rawcapture", rawCaptureFile==null?null:rawCaptureFile.getAbsolutePath());
         out.putString("of_video_quality", videoQuality == Quality.UHD ? "UHD" : videoQuality == Quality.HD ? "HD" : "FHD");
         out.putInt("of_video_fps", videoFps);
+        out.putBoolean("of_native_8k", selectedEightK);
     }
     @Override public void onDestroy() {
         destroyed=true;
         previewHandler.removeCallbacksAndMessages(null);
         if(recording!=null){recording.stop();recording=null;}
+        if(native8KRecorder!=null){native8KRecorder.abort();native8KRecorder=null;}
         if(provider!=null)provider.unbindAll();
         if(videoReview!=null)videoReview.stopPlayback();
         if(reviewBitmap!=null){reviewBitmap.recycle();reviewBitmap=null;}
