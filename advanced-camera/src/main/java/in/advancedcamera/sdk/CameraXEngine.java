@@ -62,13 +62,20 @@ import java.util.Arrays;
 /** Original Java/CameraX implementation. NO OnePlus bytecode, assets or system privileges. */
 public final class CameraXEngine implements CameraEngine {
     private enum Mode { PHOTO, VIDEO, PORTRAIT, NIGHT, HDR }
+    private enum PhotoFormat { JPEG, RAW }
     private static final String[] FILTERS = {"Natural", "Mono", "Warm", "Cool", "Vivid"};
     private CameraSession session;
     private ComponentActivity activity;
     private FrameLayout root, previewStage;
     private LinearLayout quickPanel, morePanel, detailControls, zoomPresetBar;
     private HorizontalScrollView modeScroller;
-    private TextView shutterControl;
+    private TextView shutterControl, formatButton, videoSettingsButton;
+    private FocusRing focusRing;
+    private PhotoFormat photoFormat = PhotoFormat.JPEG;
+    private File rawCaptureFile;
+    private boolean ultraHdrCapture, hdrUltraFallback, rawSupported;
+    private Quality videoQuality = Quality.FHD;
+    private int videoFps = 30;
     private static final int ACCENT = 0xFFFF941C;
     private static final int PANEL_BG = 0xF2181A1D;
     private PreviewView viewfinder;
@@ -106,6 +113,8 @@ public final class CameraXEngine implements CameraEngine {
         session = s;
         activity = s.activity();
         selectedAspect = s.request().aspectRatio;
+        if (s.request().format == CameraRequest.Format.RAW && s.request().purpose != CameraRequest.Purpose.TENANT_PHOTO)
+            photoFormat = PhotoFormat.RAW;
         facing = s.request().facing == CameraRequest.Facing.FRONT ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK;
         if (state != null) {
             try {
@@ -117,6 +126,12 @@ public final class CameraXEngine implements CameraEngine {
             inReview = state.getBoolean("of_review", false) && captureFile != null && captureFile.exists();
             filterIndex = state.getInt("of_filter", 0);
             brightness = state.getFloat("of_brightness", 0f);
+            try { photoFormat = PhotoFormat.valueOf(state.getString("of_photoformat", photoFormat.name())); }
+            catch (IllegalArgumentException ignored) {photoFormat = PhotoFormat.JPEG;}
+            rawCaptureFile = state.getString("of_rawcapture") == null ? null : new File(state.getString("of_rawcapture"));
+            videoFps = state.getInt("of_video_fps", 30);
+            String quality = state.getString("of_video_quality", "FHD");
+            videoQuality = "UHD".equals(quality) ? Quality.UHD : "HD".equals(quality) ? Quality.HD : Quality.FHD;
             timerSeconds = state.getInt("of_timer", 0);
             try { selectedAspect = CameraRequest.AspectRatio.valueOf(state.getString("of_aspect", selectedAspect.name())); }
             catch (IllegalArgumentException ignored) { }
@@ -194,6 +209,8 @@ public final class CameraXEngine implements CameraEngine {
         };
         grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
         previewStage.addView(grid, new FrameLayout.LayoutParams(-1,-1));
+        focusRing = new FocusRing(activity);
+        previewStage.addView(focusRing, new FrameLayout.LayoutParams(-1,-1));
         ScaleGestureDetector pinch = new ScaleGestureDetector(activity, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override public boolean onScaleBegin(ScaleGestureDetector detector) {
                 pinchInProgress=true; return true;
@@ -224,7 +241,8 @@ public final class CameraXEngine implements CameraEngine {
             if (camera==null || inReview) return true;
             androidx.camera.core.MeteringPoint p = viewfinder.getMeteringPointFactory().createPoint(event.getX(), event.getY());
             camera.getCameraControl().startFocusAndMetering(new androidx.camera.core.FocusMeteringAction.Builder(p).build());
-            show("Focusing • tap again to refocus");
+            focusRing.focusAt(event.getX(), event.getY());
+            show("Tap to focus • exposure metering");
             return true;
         });
 
@@ -248,6 +266,10 @@ public final class CameraXEngine implements CameraEngine {
         ratioButton = toolbarAction(aspectLabel(), "Choose photo aspect ratio", v -> showAspectOptions());
         addChip(topBar, ratioButton);
         addChip(topBar, toolbarAction("EV", "Open exposure and zoom sliders", v -> toggleDetailControls()));
+        formatButton = toolbarAction("JPG", "Choose JPEG or DNG RAW photo", v -> showPhotoFormats());
+        addChip(topBar, formatButton);
+        videoSettingsButton = toolbarAction("1080p·30", "Video resolution and frame rate", v -> showVideoSettings());
+        addChip(topBar, videoSettingsButton);
         gridButton = toolbarAction(gridEnabled ? "▦" : "▤", "Toggle composition grid", v -> {
             gridEnabled = !gridEnabled;
             grid.setVisibility(gridEnabled ? View.VISIBLE : View.GONE);
@@ -590,6 +612,14 @@ public final class CameraXEngine implements CameraEngine {
      */
     private void updateAspectUi() {
         if (ratioButton != null) ratioButton.setText(mode == Mode.VIDEO ? "16:9" : aspectLabel());
+        if (formatButton != null) {
+            formatButton.setVisibility(mode == Mode.VIDEO || session.request().purpose == CameraRequest.Purpose.TENANT_PHOTO ? View.GONE : View.VISIBLE);
+            formatButton.setText(photoFormat == PhotoFormat.RAW && mode == Mode.PHOTO ? "RAW" : "JPG");
+        }
+        if (videoSettingsButton != null) {
+            videoSettingsButton.setVisibility(mode == Mode.VIDEO ? View.VISIBLE : View.GONE);
+            videoSettingsButton.setText(qualityName() + "·" + videoFps);
+        }
         if (previewStage == null || viewfinder == null || grid == null) return;
         previewStage.post(() -> {
             if (destroyed || previewStage.getWidth() == 0 || previewStage.getHeight() == 0) return;
@@ -603,6 +633,7 @@ public final class CameraXEngine implements CameraEngine {
             FrameLayout.LayoutParams frame = new FrameLayout.LayoutParams(width, height, Gravity.CENTER);
             viewfinder.setLayoutParams(frame);
             grid.setLayoutParams(new FrameLayout.LayoutParams(width, height, Gravity.CENTER));
+            if (focusRing != null) focusRing.setLayoutParams(new FrameLayout.LayoutParams(width, height, Gravity.CENTER));
         });
     }
     private void cycleAspect() {
@@ -953,6 +984,10 @@ public final class CameraXEngine implements CameraEngine {
         out.putBoolean("of_review",inReview);out.putInt("of_filter",filterIndex);
         out.putFloat("of_brightness",brightness);out.putInt("of_timer",timerSeconds);
         out.putString("of_aspect",selectedAspect.name());
+        out.putString("of_photoformat", photoFormat.name());
+        out.putString("of_rawcapture", rawCaptureFile==null?null:rawCaptureFile.getAbsolutePath());
+        out.putString("of_video_quality", videoQuality == Quality.UHD ? "UHD" : videoQuality == Quality.HD ? "HD" : "FHD");
+        out.putInt("of_video_fps", videoFps);
     }
     @Override public void onDestroy() {
         destroyed=true;
@@ -963,6 +998,36 @@ public final class CameraXEngine implements CameraEngine {
         if(reviewBitmap!=null){reviewBitmap.recycle();reviewBitmap=null;}
         // Only unconfirmed raw captures are cleaned up; confirmed URIs belong to host until release.
         if(!activity.isChangingConfigurations() && captureFile!=null && captureFile.exists())captureFile.delete();
+        if(!activity.isChangingConfigurations() && rawCaptureFile!=null && rawCaptureFile.exists())rawCaptureFile.delete();
+    }
+
+    /** One-shot focus reticle matching the actual tap location, not a fake permanent lock. */
+    private final class FocusRing extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private float touchX, touchY;
+        private boolean visible;
+        FocusRing(android.content.Context context) { super(context); setClickable(false); }
+        void focusAt(float x,float y) {
+            touchX=x;touchY=y;visible=true;
+            animate().cancel();setAlpha(1f);invalidate();
+            animate().alpha(0f).setStartDelay(1100).setDuration(330).start();
+        }
+        @Override protected void onDraw(Canvas c) {
+            super.onDraw(c);
+            if (!visible) return;
+            paint.setColor(0xFFF3F4F5);paint.setStrokeWidth(dp(2));paint.setStyle(Paint.Style.STROKE);
+            float size=dp(45), corner=dp(13), x=touchX, y=touchY;
+            float left=x-size,right=x+size,top=y-size,bottom=y+size;
+            for(int ix=0;ix<2;ix++)for(int iy=0;iy<2;iy++){
+                float cx=ix==0?left:right,cy=iy==0?top:bottom;
+                float dx=ix==0?corner:-corner,dy=iy==0?corner:-corner;
+                c.drawLine(cx,cy,cx+dx,cy,paint);c.drawLine(cx,cy,cx,cy+dy,paint);
+            }
+            paint.setColor(ACCENT);paint.setStrokeWidth(dp(1.4f));
+            c.drawLine(x+size+dp(10),y-dp(18),x+size+dp(10),y+dp(18),paint);
+            c.drawCircle(x+size+dp(10),y,dp(6),paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
     }
     private abstract static class SimpleSeekBar implements SeekBar.OnSeekBarChangeListener {
         @Override public void onStartTrackingTouch(SeekBar bar) {}
