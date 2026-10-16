@@ -2,26 +2,42 @@ name: Android CI
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - name: Set up Android SDK
+        id: sdk
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
       - name: Install Android 35 platform and build tools
+        id: platforms
         run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle :advanced-camera:assembleRelease :camera-app:assembleDebug :integration-example:assembleDebug --stacktrace
-      - uses: actions/upload-artifact@v4
+      - name: Compile camera library and applications
+        id: compile
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :advanced-camera:assembleRelease :camera-app:assembleDebug :integration-example:assembleDebug --stacktrace 2>&1 | tee "$RUNNER_TEMP/openframe-build.log"
+      - name: Upload build outputs
+        uses: actions/upload-artifact@v4
         if: success()
         with:
           name: openframe-debug-apks
@@ -29,3 +45,38 @@ jobs:
             camera-app/build/outputs/apk/debug/*.apk
             integration-example/build/outputs/apk/debug/*.apk
             advanced-camera/build/outputs/aar/*.aar
+      - name: Report failed push build to GitHub Issues
+        if: ${{ failure() && github.event_name == 'push' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_OUTCOME: ${{ steps.sdk.outcome }}
+          PLATFORMS_OUTCOME: ${{ steps.platforms.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+        run: |
+          python3 - <<'PY'
+          import os,re,pathlib
+          log=pathlib.Path(os.environ["RUNNER_TEMP"])/"openframe-build.log"
+          lines=log.read_text(errors="replace").splitlines() if log.exists() else []
+          matches=[i for i,line in enumerate(lines) if re.search(r"(^e: |error:|What went wrong|Execution failed|FAILURE:|Could not |failed with|symbol:|location:|\> Task .* FAILED)",line,re.I)]
+          keep=set()
+          for i in matches[-24:]:
+              keep.update(range(max(0,i-1),min(len(lines),i+4)))
+          excerpt="\n".join(lines[i] for i in sorted(keep))
+          if not excerpt and lines: excerpt="\n".join(lines[-45:])
+          excerpt=excerpt[-13000:]
+          # Discard common token-like assignments from excerpts.
+          excerpt=re.sub(r"(?im)^.*(?:PASSWORD|TOKEN|SECRET|API_KEY)\s*[=:].*$","[redacted environment value]",excerpt)
+          report=(
+              "Automated OpenFrame Camera build diagnostic.\n\n"
+              f"Commit: `{os.environ['GITHUB_SHA']}`\n"
+              f"Run: https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}\n\n"
+              f"Stages: Android SDK={os.getenv('SDK_OUTCOME')}, "
+              f"platforms={os.getenv('PLATFORMS_OUTCOME')}, "
+              f"Gradle compile={os.getenv('COMPILE_OUTCOME')}.\n\n"
+              "Relevant Gradle error excerpt:\n\n```text\n"
+              + (excerpt or "Build did not reach Gradle or no build log was captured.")
+              + "\n```\n")
+          pathlib.Path("/tmp/openframe-ci-report.md").write_text(report)
+          PY
+          gh issue create --title "CI build failure: ${GITHUB_SHA::7}" --body-file /tmp/openframe-ci-report.md || true
