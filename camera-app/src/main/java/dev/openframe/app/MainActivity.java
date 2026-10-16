@@ -39,12 +39,14 @@ public final class MainActivity extends ComponentActivity {
         getWindow().setStatusBarColor(0xFF080B0F);
         getWindow().setNavigationBarColor(0xFF080B0F);
         camera=AdvancedCamera.register(this,result->{
-            if(result.status==CameraResult.Status.CANCELLED){details.setText("Capture cancelled • nothing was saved");return;}
+            if(result.status==CameraResult.Status.CANCELLED){finish();return;}
             if(result.status==CameraResult.Status.FAILURE){details.setText("Camera error: "+result.errorCode);return;}
             lastResult=result.uri;lastMime=result.mimeType;
-            details.setText("Captured • "+result.width+" × "+result.height+" • "+result.mimeType+"\nPrivate URI: "+result.uri);
+            details.setText("Capture ready • "+result.width+" × "+result.height+" • "+result.mimeType+"\nPrivate until you choose Export");
             image.setVisibility(View.GONE);video.setVisibility(View.GONE);
-            if(result.mimeType.startsWith("image/")){image.setVisibility(View.VISIBLE);image.setImageURI(result.uri);}
+            if("image/x-adobe-dng".equals(result.mimeType)){
+                details.setText("DNG RAW image captured • "+result.width+" × "+result.height+"\nUse Export to save the original sensor file.");
+            } else if(result.mimeType.startsWith("image/")){image.setVisibility(View.VISIBLE);image.setImageURI(result.uri);}
             else{video.setVisibility(View.VISIBLE);video.setVideoURI(result.uri);video.setOnPreparedListener(p->p.setLooping(true));video.start();}
         });
         documentExport=registerForActivityResult(new ActivityResultContracts.CreateDocument("*/*"),uri->{
@@ -59,42 +61,45 @@ public final class MainActivity extends ComponentActivity {
         });
         CameraCacheCleaner.deleteAbandoned(this);
         buildUi();
+        // Standalone mode opens directly into the same embedded camera Activity.
+        // Only show this result screen after the user confirms a capture.
+        getWindow().getDecorView().post(() -> launchFullCamera());
     }
     private TextView label(String s,int size,int color){
         TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);return t;
     }
     private void addGap(LinearLayout layout,int gap){View v=new View(this);layout.addView(v,new LinearLayout.LayoutParams(1,dp(gap)));}
+    private void launchFullCamera() {
+        if (isFinishing() || isDestroyed()) return;
+        camera.launch(CameraRequest.builder(CameraRequest.Purpose.GENERAL)
+            .allowEditing(true).allowEnhancement(true).maxDimensions(4096,4096).jpegQuality(92).build());
+    }
+    /** Standalone display is only reached AFTER confirming a photo or video. */
     private void buildUi(){
-        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setBackgroundColor(0xFF080B0F);
-        LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(24),dp(56),dp(24),dp(28));
+        ScrollView scroll=new ScrollView(this);
+        scroll.setFillViewport(true);scroll.setBackgroundColor(0xFF08090C);
+        LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER_HORIZONTAL);
+        content.setPadding(dp(22),dp(40),dp(22),dp(24));
         scroll.addView(content);setContentView(scroll);
-        TextView tag=label("OPENFRAME  /  CAMERA SDK",13,0xFFDEEBAD);content.addView(tag);
-        addGap(content,16);
-        TextView hero=label("A camera that lives\ninside your apps.",33,Color.WHITE);
-        hero.setTypeface(null,android.graphics.Typeface.BOLD);content.addView(hero);
-        addGap(content,13);
-        content.addView(label("Original open-source Android camera engine. Professional capture controls, private output, reusable Java integration.",15,0xFFC3C9D0));
-        addGap(content,30);
-        button(content,"Open full camera","Explore Photo, Video, device HDR, Portrait and Night",()->
-            camera.launch(CameraRequest.builder(CameraRequest.Purpose.GENERAL)
-                .allowEditing(true).allowEnhancement(true).maxDimensions(4096,4096).jpegQuality(92).build()));
-        addGap(content,12);
-        button(content,"Resident portrait preset","3:4 JPEG • below 2 MB • no location metadata",()->
-            camera.launch(CameraRequest.tenantPhoto()));
-        addGap(content,28);
-        details=label("No capture yet. Photos and videos stay in private application storage until you export them.",13,0xFFCFD7DD);
-        content.addView(details);
+        TextView tag=label("OPENFRAME  •  CAPTURE REVIEW",12,0xFFFF941C);content.addView(tag);
         addGap(content,18);
+        details=label("Preparing camera…",15,0xFFC6CBD1);
+        content.addView(details);addGap(content,12);
         image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        content.addView(image,new LinearLayout.LayoutParams(-1,dp(290)));image.setVisibility(View.GONE);
-        video=new VideoView(this);content.addView(video,new LinearLayout.LayoutParams(-1,dp(290)));video.setVisibility(View.GONE);
-        addGap(content,10);
-        button(content,"Export confirmed capture","Optional • user chooses where to save",()->{
-            if(lastResult==null){Toast.makeText(this,"Capture something first",Toast.LENGTH_SHORT).show();return;}
-            documentExport.launch("OpenFrame-"+System.currentTimeMillis()+("video/mp4".equals(lastMime)?".mp4":".jpg"));
+        content.addView(image,new LinearLayout.LayoutParams(-1,dp(375)));image.setVisibility(View.GONE);
+        video=new VideoView(this);content.addView(video,new LinearLayout.LayoutParams(-1,dp(375)));
+        video.setVisibility(View.GONE);
+        addGap(content,25);
+        button(content,"Open camera again","Capture another picture or video",this::launchFullCamera);
+        addGap(content,12);
+        button(content,"Export confirmed capture","Save a copy to your chosen folder",()->{
+            if(lastResult==null){Toast.makeText(this,"Nothing to export",Toast.LENGTH_SHORT).show();return;}
+            documentExport.launch("OpenFrame-"+System.currentTimeMillis()+
+                ("video/mp4".equals(lastMime)?".mp4":"image/x-adobe-dng".equals(lastMime)?".dng":".jpg"));
         });
-        addGap(content,14);
-        content.addView(label("No automatic gallery publication. No network tracking. No OnePlus proprietary code or assets.",12,0xFF9299A4));
+        addGap(content,24);
+        content.addView(label("Photos remain in the app's private storage until exported.",12,0xFF9299A4));
     }
     private void button(LinearLayout host,String title,String subtitle,Runnable onClick){
         LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);
