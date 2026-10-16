@@ -80,6 +80,7 @@ public final class CameraXEngine implements CameraEngine {
     private boolean ultraHdrCapture, hdrUltraFallback, rawSupported;
     private Quality videoQuality = Quality.FHD;
     private int videoFps = 30;
+    private boolean videoBindRecoveryAttempted;
     private static final int ACCENT = 0xFFFF941C;
     private static final int PANEL_BG = 0xF2181A1D;
     private PreviewView viewfinder;
@@ -656,6 +657,7 @@ public final class CameraXEngine implements CameraEngine {
                 }
                 videoQuality=q;
             }
+            videoBindRecoveryAttempted=false;
             updateAspectUi();bindCamera();
             show("Video target: "+qualityName()+" @ "+videoFps+"fps (actual depends on device)");
         });
@@ -782,6 +784,7 @@ public final class CameraXEngine implements CameraEngine {
         if (morePanel != null) morePanel.setVisibility(View.GONE);
         if (detailControls != null) detailControls.setVisibility(View.GONE);
         if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
+        if (next == Mode.VIDEO && mode != Mode.VIDEO) videoBindRecoveryAttempted=false;
         if (next != Mode.HDR) { hdrUltraFallback=false; ultraHdrCapture=false; }
         mode=next;
         if(mode!=Mode.PHOTO && session.request().format!=CameraRequest.Format.RAW) photoFormat=PhotoFormat.JPEG;
@@ -943,6 +946,13 @@ public final class CameraXEngine implements CameraEngine {
         } catch (Exception ex) {
             android.util.Log.e("OpenFrame", "Camera bind failed", ex);
             Mode failed = mode;
+            if(failed == Mode.VIDEO && !videoBindRecoveryAttempted &&
+                (videoFps!=30 || videoQuality!=Quality.HD)){
+                videoBindRecoveryAttempted=true;
+                videoFps=30;videoQuality=Quality.HD;
+                show("Video combination unsupported • retrying 720p/30");
+                bindCamera();return;
+            }
             if (failed != Mode.PHOTO) {
                 mode = Mode.PHOTO;
                 hdrUltraFallback = false;
@@ -989,16 +999,18 @@ public final class CameraXEngine implements CameraEngine {
             ImageCapture.OutputFileOptions dngOptions=
                 new ImageCapture.OutputFileOptions.Builder(rawCaptureFile).build();
             final AtomicInteger saved=new AtomicInteger();
+            final java.util.concurrent.atomic.AtomicBoolean failed=new java.util.concurrent.atomic.AtomicBoolean();
             try {
                 imageCapture.takePicture(dngOptions,jpgOptions,ContextCompat.getMainExecutor(activity),
                     new ImageCapture.OnImageSavedCallback(){
                         @Override public void onImageSaved(ImageCapture.OutputFileResults result){
-                            if(saved.incrementAndGet()==2) {
+                            if(!failed.get() && saved.incrementAndGet()==2) {
                                 busy=false;
                                 if(!destroyed)openReview();
                             }
                         }
                         @Override public void onError(ImageCaptureException e){
+                            failed.set(true);
                             busy=false;
                             if(captureFile!=null)captureFile.delete();
                             if(rawCaptureFile!=null)rawCaptureFile.delete();
