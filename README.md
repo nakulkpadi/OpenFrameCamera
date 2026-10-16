@@ -1,6 +1,6 @@
 # OpenFrame Camera — Android camera app + embeddable SDK
 
-**Status: `0.2.0-beta` — GitHub CI builds run; on-device validation in progress.** OpenFrame is an **original**, independent Android camera implementation inspired by useful interaction patterns seen in premium smartphone cameras. No OEM proprietary code, binaries, shaders, art, or models are included. The original reference APK is deliberately excluded from this repository.
+**Status: `0.2.3-beta` — GitHub CI builds run; the new high-resolution paths require physical-device testing.** OpenFrame is an **original**, independent Android camera implementation inspired by useful interaction patterns seen in premium smartphone cameras. No OEM proprietary code, binaries, shaders, art, or models are included. The original reference APK is deliberately excluded from this repository.
 
 ## What you get
 
@@ -17,7 +17,8 @@
 |---|---|---|
 | Fullscreen live preview, back/front switch | Yes | Requires runtime Camera permission + CameraX device support |
 | JPEG photo capture | Yes | Private cache; reviewed before returning |
-| HD / FHD / 4K video + requested 30/60 fps | Conditional | Selectable quality must be reported by the chosen lens, and requested fps is a CameraX hint, not a guaranteed measured output |
+| 720p, 1080p, 4K recording | Conditional | CameraX device capabilities determine quality availability |
+| 4K/60 and 8K/24 recording | Conditional | CameraX 1.5 uses a session-verified 60fps combination where supported. A separate Camera2/MediaRecorder HEVC path can attempt real 4K60 or 8K24 only if the public camera stream, frame rate and encoder all advertise that exact mode. The OnePlus stock app may access private OEM capabilities not visible to OpenFrame |
 | Pinch zoom + slider | Yes | CameraX zoom limits depend on device |
 | Tap-to-focus with animated focus reticle; auto-exposure compensation | Yes | Actual focus result and EV range depend on lens |
 | 0 / 3 / 10 second timer, thirds grid | Yes | Timer does not persist through activity stop |
@@ -89,9 +90,11 @@ extensions; flash and torch when available; real 3:4, 4:3, and 1:1 post-capture
 crop framing; shutter timers, zoom and exposure slider, front/back camera switch,
 review filters, brightness, recapture and private handoff.
 
-**Not implemented yet:** Pro/RAW, ultra-wide physical camera routing, 4K/60fps/8K
-selection, panorama, long-exposure stacking, action stabilization, XPAN and dual
-video. They appear as clearly identified future features only, not as selectable
+**Not implemented yet:** manual Pro ISO/shutter, ultra-wide physical camera routing,
+panorama, long-exposure stacking, action stabilization, XPAN and dual video.
+RAW DNG is implemented for supported CameraX sensors. The optional 8K/24 and
+4K/60 recording modes use the public Camera2/HEVC recorder and must be verified
+on the device. They appear as clearly identified future features only, not as selectable
 or falsely working camera modes. Do not confuse zoom presets with physical lenses.
 
 The camera launcher uses a resized version of the user-provided OpenFrame
@@ -107,3 +110,14 @@ The standalone app opens the camera Activity immediately, with no developer demo
 Use the upper **JPG/RAW** chip in Photo mode to request Adobe DNG capture on lenses exposing RAW+JPEG via CameraX. DNG keeps original sensor data and may contain camera metadata: inspect it before sharing. Sundar Wadi Rent's tenant preset remains JPEG-only. Ultra HDR JPEG_R is saved without recompression; the 3:4/1:1 crop and filters are intentionally unavailable in HDR-pass-through mode. Photo/Video/Portrait switching and 720p/1080p/4K video quality depend on camera capabilities; 30/60 fps is a target, not a verified output frame rate.
 
 **Debug install:** GitHub-hosted CI debug APKs may be signed by different temporary keys per workflow run. If Android rejects an update due to a signature mismatch, back up any files first and uninstall the previous debug version. For distributable releases, use a persistent protected signing key and CI secrets; never commit the release signing key.
+
+## High-resolution video (0.2.3 beta)
+
+The OnePlus 12 stock camera advertises **4K/60** and **8K/24**, but these are not guarantees about the capabilities exposed to third-party apps. OpenFrame checks the public selected-camera capabilities:
+
+- CameraX 1.5 session-specific frame-rate ranges for the actual Preview + VideoCapture combination and uses `SessionConfig.Builder.setFrameRateRange()` for supported 60fps sessions (rather than the old best-effort target-rate hint).
+- A separate Camera2/HEVC recording backend for 4K/60 or 8K/24 is activated only if the selected camera exposes the correct MediaRecorder output size, AE frame-rate range, and HEVC encoder capability.
+- If the public APIs do not expose the combination, its control is disabled. An OEM camera may use hidden profiles, private IDs or privileged pipelines that open-source third-party apps cannot safely assume are available.
+- The video resolution and frame rate must be verified using a **real recorded MP4**. A successful APK build does not prove that either 60fps or 8K works on a particular phone.
+
+The native high-resolution recorder stores output in OpenFrame's private cache, has no cloud upload, and closes its camera/session on failure, cancellation and activity shutdown. This is an experimental on-device beta feature, not an assertion of parity with OnePlus stock recording.
