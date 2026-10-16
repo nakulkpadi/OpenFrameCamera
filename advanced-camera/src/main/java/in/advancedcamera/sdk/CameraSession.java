@@ -30,7 +30,7 @@ public final class CameraSession {
     public CameraRequest request() { return request; }
     public File createPrivateCaptureFile() throws IOException { return createPrivateCaptureFile(".jpg"); }
     public File createPrivateCaptureFile(String suffix) throws IOException {
-        if (!".jpg".equals(suffix) && !".mp4".equals(suffix)) throw new IOException("Invalid media suffix");
+        if (!".jpg".equals(suffix) && !".mp4".equals(suffix) && !".dng".equals(suffix)) throw new IOException("Invalid media suffix");
         File dir = new File(activity.getCacheDir(), "advanced-camera/captures");
         if (!dir.exists() && !dir.mkdirs()) throw new IOException("Cannot create capture directory");
         return File.createTempFile("capture-", suffix, dir);
@@ -51,6 +51,64 @@ public final class CameraSession {
             } catch (Exception ex) {
                 android.util.Log.e("OpenFrame", "JPEG finalization failed", ex);
                 result = CameraResult.failure("IMAGE_FINALIZATION_FAILED");
+            }
+            deliver(result);
+        });
+    }
+    /** Preserve an actual sensor DNG. No JPEG post-processing is applied to RAW data. */
+    public void confirmRaw(File capturedDng, File previewJpeg) {
+        if (!finished.compareAndSet(false, true)) return;
+        worker.execute(() -> {
+            CameraResult result;
+            try {
+                if (request.purpose == CameraRequest.Purpose.TENANT_PHOTO)
+                    throw new IOException("RAW is disabled for identity photographs");
+                File captures = new File(activity.getCacheDir(), "advanced-camera/captures").getCanonicalFile();
+                if (capturedDng == null || !capturedDng.isFile()
+                        || !capturedDng.getCanonicalFile().getParentFile().equals(captures)
+                        || capturedDng.length() == 0) throw new IOException("RAW capture missing");
+                int width = 0, height = 0;
+                if (previewJpeg != null && previewJpeg.isFile()) {
+                    android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                    opts.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeFile(previewJpeg.getAbsolutePath(), opts);
+                    width = Math.max(0, opts.outWidth); height = Math.max(0, opts.outHeight);
+                }
+                File dest = new File(activity.getCacheDir(), "advanced-camera/confirmed");
+                if (!dest.exists() && !dest.mkdirs()) throw new IOException("Cannot create confirmed dir");
+                File finalFile = new File(dest, "final-" + UUID.randomUUID() + ".dng");
+                Files.move(capturedDng.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                if (previewJpeg != null) previewJpeg.delete();
+                result = CameraResult.success(toUri(finalFile), "image/x-adobe-dng", width, height);
+            } catch (Exception ex) {
+                android.util.Log.e("OpenFrame", "RAW finalization failed", ex);
+                result = CameraResult.failure("RAW_FINALIZATION_FAILED");
+            }
+            deliver(result);
+        });
+    }
+    /** Transfer Ultra HDR JPEG_R without JPEG re-encoding, which would discard its gain map. */
+    public void confirmUltraHdr(File capturedJpeg) {
+        if (!finished.compareAndSet(false, true)) return;
+        worker.execute(() -> {
+            CameraResult result;
+            try {
+                File captures = new File(activity.getCacheDir(), "advanced-camera/captures").getCanonicalFile();
+                if (capturedJpeg == null || !capturedJpeg.isFile()
+                    || !capturedJpeg.getCanonicalFile().getParentFile().equals(captures)
+                    || capturedJpeg.length() == 0) throw new IOException("HDR capture missing");
+                File dest = new File(activity.getCacheDir(), "advanced-camera/confirmed");
+                if (!dest.exists() && !dest.mkdirs()) throw new IOException("Cannot create confirmed dir");
+                File finalFile = new File(dest, "final-" + UUID.randomUUID() + ".jpg");
+                Files.move(capturedJpeg.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(finalFile.getAbsolutePath(), o);
+                result = CameraResult.success(toUri(finalFile), "image/jpeg",
+                    Math.max(0, o.outWidth), Math.max(0, o.outHeight));
+            } catch (Exception ex) {
+                android.util.Log.e("OpenFrame", "Ultra HDR transfer failed", ex);
+                result = CameraResult.failure("HDR_FINALIZATION_FAILED");
             }
             deliver(result);
         });
