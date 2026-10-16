@@ -64,6 +64,35 @@ final class Camera2HighResRecorder {
         CAPABILITIES.put(key,answer);
         return answer;
     }
+    // The public camera stack sometimes omits a specific 60fps AE range even
+    // though the recorder stream and hardware codec are advertised. A relaxed
+    // probe allows the user to TRY the configuration; errors still fail safely.
+    static boolean canAttempt(Context context,String id,int width,int height,int fps) {
+        if(id==null || android.os.Build.VERSION.SDK_INT<31)return false;
+        if(canRecord(context,id,width,height,fps))return true;
+        try {
+            CameraManager manager=(CameraManager)context.getSystemService(Context.CAMERA_SERVICE);
+            StreamConfigurationMap map=manager.getCameraCharacteristics(id)
+                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            if(map==null)return false;
+            boolean sizeOk=false;
+            Size[] sizes=map.getOutputSizes(MediaRecorder.class);
+            if(sizes!=null)for(Size sz:sizes)
+                if(sz.getWidth()==width && sz.getHeight()==height)sizeOk=true;
+            if(!sizeOk)return false;
+            for(MediaCodecInfo encoder:new MediaCodecList(MediaCodecList.ALL_CODECS).getCodecInfos()) {
+                if(!encoder.isEncoder())continue;
+                for(String type:encoder.getSupportedTypes()){
+                    if(!MediaFormat.MIMETYPE_VIDEO_HEVC.equalsIgnoreCase(type))continue;
+                    try{
+                        if(encoder.getCapabilitiesForType(type).getVideoCapabilities()
+                            .isSizeSupported(width,height)) return true;
+                    }catch(Exception ignored){}
+                }
+            }
+        }catch(Exception ex){Log.w(TAG,"Relaxed video probe failed",ex);}
+        return false;
+    }
     private static boolean probe(Context context, String id,int width,int height,int fps) {
         try {
             CameraManager manager=(CameraManager)context.getSystemService(Context.CAMERA_SERVICE);
@@ -88,7 +117,7 @@ final class Camera2HighResRecorder {
             }
             if(!fpsAvailable)return false;
             // Encoder and stream sizes must both be publicly advertised.
-            MediaCodecList codecs=new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+            MediaCodecList codecs=new MediaCodecList(MediaCodecList.ALL_CODECS);
             for(MediaCodecInfo codec:codecs.getCodecInfos()){
                 if(!codec.isEncoder())continue;
                 for(String type:codec.getSupportedTypes()){
@@ -136,8 +165,8 @@ final class Camera2HighResRecorder {
     }
 
     void start(){
-        if(!canRecord(activity,cameraId,width,height,fps)){
-            main.post(()->listener.onFailure("Android does not expose the selected Camera2 stream, frame rate and HEVC encoder"));
+        if(!canAttempt(activity,cameraId,width,height,fps)){
+            main.post(()->listener.onFailure("Android does not expose the requested video size and HEVC encoder"));
             return;
         }
         thread=new HandlerThread("openframe-camera2-8k");
