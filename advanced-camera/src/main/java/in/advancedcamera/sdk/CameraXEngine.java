@@ -14,7 +14,10 @@ import android.graphics.Paint;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
+import android.widget.HorizontalScrollView;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
@@ -68,6 +71,10 @@ public final class CameraXEngine implements CameraEngine {
     private VideoView videoReview;
     private View grid;
     private LinearLayout topBar, bottomPanel, modeBar, filterBar, reviewBar;
+    private View topControls;
+    private final Handler previewHandler = new Handler(Looper.getMainLooper());
+    private int bindGeneration, recoveryAttempts;
+    private boolean previewStreaming, paused, initializingCamera;
     private TextView status, flashButton, ratioButton, timerButton, gridButton, modeLabel, zoomLabel, filterLabel;
     private SeekBar zoomSeek, exposureSeek, brightnessSeek;
     private ProcessCameraProvider provider;
@@ -115,6 +122,7 @@ public final class CameraXEngine implements CameraEngine {
         });
         microphonePermissionLauncher = activity.registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
             show(granted ? "Microphone enabled for video" : "Microphone denied • video will record silently");
+            if (!destroyed && mode == Mode.VIDEO && provider != null && !inReview) bindCamera();
         });
         buildInterface();
         if (inReview) openReview();
@@ -146,7 +154,8 @@ public final class CameraXEngine implements CameraEngine {
         v.setOnClickListener(callback); return v;
     }
     private void addChip(LinearLayout container, TextView v) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1);
+        v.setMinWidth(dp(72));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44));
         p.setMargins(dp(3), 0, dp(3), 0); container.addView(v, p);
     }
     private void show(String message) { status.setText(message); }
@@ -157,6 +166,13 @@ public final class CameraXEngine implements CameraEngine {
         viewfinder = new PreviewView(activity);
         viewfinder.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
         root.addView(viewfinder, new FrameLayout.LayoutParams(-1, -1));
+        viewfinder.getPreviewStreamState().observe(activity, streamState -> {
+            previewStreaming = streamState == PreviewView.StreamState.STREAMING;
+            if (previewStreaming && !destroyed && !inReview) {
+                recoveryAttempts = 0;
+                show(mode.name() + " • preview streaming");
+            }
+        });
         grid = new View(activity) {
             final Paint p = new Paint(3);
             @Override protected void onDraw(Canvas c) {
@@ -199,7 +215,7 @@ public final class CameraXEngine implements CameraEngine {
             if (camera==null || inReview) return true;
             androidx.camera.core.MeteringPoint p = viewfinder.getMeteringPointFactory().createPoint(event.getX(), event.getY());
             camera.getCameraControl().startFocusAndMetering(new androidx.camera.core.FocusMeteringAction.Builder(p).build());
-            show("Focus locked • tap again to refocus");
+            show("Focusing • tap again to refocus");
             return true;
         });
         topBar = new LinearLayout(activity);
@@ -208,7 +224,13 @@ public final class CameraXEngine implements CameraEngine {
         topBar.setPadding(dp(10),dp(12),dp(10),dp(12));
         FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         topParams.topMargin = dp(30);
-        root.addView(topBar, topParams);
+        HorizontalScrollView scroll = new HorizontalScrollView(activity);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setFillViewport(true);
+        scroll.addView(topBar, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(scroll, topParams);
+        topControls = scroll;
         addChip(topBar, chip("✕", v -> session.cancel()));
         flashButton = chip("⚡ Auto", v -> cycleFlash()); addChip(topBar, flashButton);
         ratioButton = chip(aspectLabel(), v -> cycleAspect()); addChip(topBar, ratioButton);
@@ -222,7 +244,10 @@ public final class CameraXEngine implements CameraEngine {
         FrameLayout.LayoutParams bottom = new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
         root.addView(bottomPanel,bottom);
         status = text("OpenFrame • ready to capture",12,false);
-        status.setOnClickListener(v->{if(!hasCameraPermission()) permissionLauncher.launch(Manifest.permission.CAMERA);});
+        status.setOnClickListener(v -> {
+            if (!hasCameraPermission()) permissionLauncher.launch(Manifest.permission.CAMERA);
+            else { recoveryAttempts = 0; if (provider == null) initializeCamera(); else bindCamera(); }
+        });
         status.setTextColor(0xFFCED2D7);
         bottomPanel.addView(status,new LinearLayout.LayoutParams(-1,dp(30)));
         zoomLabel = text("1.0×",17,true);
@@ -323,6 +348,8 @@ public final class CameraXEngine implements CameraEngine {
         reviewBar.addView(actions,new LinearLayout.LayoutParams(-1,dp(60)));
         reviewBar.setVisibility(View.GONE);
         refreshModeChips();
+        updateAspectUi();
+        updateFlashUi();
     }
     private String aspectLabel() {
         switch (selectedAspect) {
@@ -332,26 +359,67 @@ public final class CameraXEngine implements CameraEngine {
             default:return "Original";
         }
     }
+    /**
+     * Display the same centered aspect region that ImageFinalizer crops from the
+     * JPEG. Video remains HD 16:9; still-image crops never silently affect it.
+     */
+    private void updateAspectUi() {
+        if (ratioButton != null) ratioButton.setText(mode == Mode.VIDEO ? "16:9" : aspectLabel());
+        if (root == null || viewfinder == null || grid == null) return;
+        root.post(() -> {
+            if (destroyed || root.getWidth() == 0 || root.getHeight() == 0) return;
+            int width = root.getWidth(), height = root.getHeight();
+            if (mode != Mode.VIDEO && selectedAspect != CameraRequest.AspectRatio.ORIGINAL) {
+                double aspect = selectedAspect == CameraRequest.AspectRatio.THREE_FOUR ? 0.75
+                        : selectedAspect == CameraRequest.AspectRatio.FOUR_THREE ? (4.0 / 3.0) : 1.0;
+                if (width / (double) height > aspect) width = Math.max(1, (int) Math.round(height * aspect));
+                else height = Math.max(1, (int) Math.round(width / aspect));
+            }
+            FrameLayout.LayoutParams frame = new FrameLayout.LayoutParams(width, height, Gravity.CENTER);
+            viewfinder.setLayoutParams(frame);
+            grid.setLayoutParams(new FrameLayout.LayoutParams(width, height, Gravity.CENTER));
+        });
+    }
     private void cycleAspect() {
-        if (session.request().purpose==CameraRequest.Purpose.TENANT_PHOTO) {show("Resident photos use a fixed 3:4 crop");return;}
-        switch(selectedAspect) {
-            case THREE_FOUR:selectedAspect=CameraRequest.AspectRatio.FOUR_THREE;break;
-            case FOUR_THREE:selectedAspect=CameraRequest.AspectRatio.SQUARE;break;
-            case SQUARE:selectedAspect=CameraRequest.AspectRatio.ORIGINAL;break;
-            default:selectedAspect=CameraRequest.AspectRatio.THREE_FOUR;
+        if (mode == Mode.VIDEO) { show("HD video is 16:9 • photo ratio does not affect recording"); return; }
+        if (session.request().purpose == CameraRequest.Purpose.TENANT_PHOTO) {
+            show("Resident ID photos use a fixed 3:4 crop"); return;
         }
-        ratioButton.setText(aspectLabel());
-        show("Crop applied to final photo • preview uses full sensor");
+        switch (selectedAspect) {
+            case THREE_FOUR: selectedAspect = CameraRequest.AspectRatio.FOUR_THREE; break;
+            case FOUR_THREE: selectedAspect = CameraRequest.AspectRatio.SQUARE; break;
+            case SQUARE: selectedAspect = CameraRequest.AspectRatio.ORIGINAL; break;
+            default: selectedAspect = CameraRequest.AspectRatio.THREE_FOUR;
+        }
+        updateAspectUi();
+        show(aspectLabel() + " photo framing • centered crop saved");
+    }
+    private void updateFlashUi() {
+        if (flashButton == null) return;
+        boolean hasFlash = camera == null || camera.getCameraInfo().hasFlashUnit();
+        flashButton.setAlpha(hasFlash ? 1f : 0.55f);
+        if (mode == Mode.VIDEO) flashButton.setText(torchEnabled ? "Torch On" : "Torch Off");
+        else flashButton.setText(flashMode == ImageCapture.FLASH_MODE_AUTO ? "Flash Auto"
+                : flashMode == ImageCapture.FLASH_MODE_ON ? "Flash On" : "Flash Off");
     }
     private void cycleFlash() {
-        flashMode = flashMode==ImageCapture.FLASH_MODE_AUTO?ImageCapture.FLASH_MODE_ON
-                :flashMode==ImageCapture.FLASH_MODE_ON?ImageCapture.FLASH_MODE_OFF:ImageCapture.FLASH_MODE_AUTO;
-        flashButton.setText(flashMode==ImageCapture.FLASH_MODE_AUTO?"⚡ Auto":flashMode==ImageCapture.FLASH_MODE_ON?"⚡ On":"⚡ Off");
-        if(imageCapture != null) imageCapture.setFlashMode(flashMode);
-        if(mode==Mode.VIDEO && camera!=null) {
-            torchEnabled = flashMode==ImageCapture.FLASH_MODE_ON;
-            camera.getCameraControl().enableTorch(torchEnabled);
+        if (camera == null) { show("Camera not ready • tap status to retry"); return; }
+        if (!camera.getCameraInfo().hasFlashUnit()) {
+            show("Flash / torch is not available on this camera"); return;
         }
+        if (mode == Mode.VIDEO) {
+            torchEnabled = !torchEnabled;
+            camera.getCameraControl().enableTorch(torchEnabled);
+            updateFlashUi();
+            show(torchEnabled ? "Video torch enabled" : "Video torch disabled");
+            return;
+        }
+        flashMode = flashMode == ImageCapture.FLASH_MODE_AUTO ? ImageCapture.FLASH_MODE_ON
+                : flashMode == ImageCapture.FLASH_MODE_ON ? ImageCapture.FLASH_MODE_OFF : ImageCapture.FLASH_MODE_AUTO;
+        if (imageCapture != null) imageCapture.setFlashMode(flashMode);
+        updateFlashUi();
+        show(flashMode == ImageCapture.FLASH_MODE_OFF ? "Photo flash off"
+                : "Photo flash fires only when taking a picture");
     }
     private void flipCamera() {
         if (isRecording || inReview || busy) return;
@@ -359,6 +427,7 @@ public final class CameraXEngine implements CameraEngine {
         // OEM extensions often have separate per-facing support.
         if(mode!=Mode.PHOTO && mode!=Mode.VIDEO) mode=Mode.PHOTO;
         refreshModeChips();
+        updateAspectUi();
         bindCamera();
     }
     private void setMode(Mode next) {
@@ -371,8 +440,11 @@ public final class CameraXEngine implements CameraEngine {
                 show(next.name()+" unavailable on this device / lens"); return;
             }
         }
+        if (mode == Mode.VIDEO && next != Mode.VIDEO) torchEnabled = false;
         mode=next;
         refreshModeChips();
+        updateAspectUi();
+        updateFlashUi();
         if(next==Mode.VIDEO && ContextCompat.checkSelfPermission(activity,Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED)
             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);
         show(next==Mode.VIDEO?"Video • tap to record":next.name()+" • ready");
@@ -396,53 +468,116 @@ public final class CameraXEngine implements CameraEngine {
         }
     }
     private void initializeCamera() {
-        if(destroyed || !hasCameraPermission() || provider!=null) return;
-        ListenableFuture<ProcessCameraProvider> future=ProcessCameraProvider.getInstance(activity);
-        future.addListener(()->{
-            if(destroyed)return;
+        if (destroyed || !hasCameraPermission() || provider != null || initializingCamera) return;
+        initializingCamera = true;
+        show("Opening camera…");
+        ListenableFuture<ProcessCameraProvider> future = ProcessCameraProvider.getInstance(activity);
+        future.addListener(() -> {
+            initializingCamera = false;
+            if (destroyed) return;
             try {
-                provider=future.get();bindCamera();
-                ListenableFuture<ExtensionsManager> extFuture=ExtensionsManager.getInstanceAsync(activity,provider);
-                extFuture.addListener(()->{
-                    if(destroyed)return;
-                    try {extensions=extFuture.get(); if (mode!=Mode.PHOTO&&mode!=Mode.VIDEO)bindCamera();}
-                    catch(Exception ex){ android.util.Log.w("OpenFrame","Extensions unavailable",ex); }
-                },ContextCompat.getMainExecutor(activity));
-            }catch(Exception ex){show("Camera unavailable: "+ex.getClass().getSimpleName());}
-        },ContextCompat.getMainExecutor(activity));
+                provider = future.get();
+                bindCamera();
+                ListenableFuture<ExtensionsManager> extFuture = ExtensionsManager.getInstanceAsync(activity, provider);
+                extFuture.addListener(() -> {
+                    if (destroyed) return;
+                    try {
+                        extensions = extFuture.get();
+                        if (mode != Mode.PHOTO && mode != Mode.VIDEO) bindCamera();
+                    } catch (Exception ex) {
+                        android.util.Log.w("OpenFrame", "Extensions unavailable", ex);
+                        if (mode != Mode.PHOTO && mode != Mode.VIDEO) {
+                            mode = Mode.PHOTO;
+                            refreshModeChips();
+                            bindCamera();
+                        }
+                    }
+                }, ContextCompat.getMainExecutor(activity));
+            } catch (Exception ex) {
+                android.util.Log.e("OpenFrame", "Camera provider initialization failed", ex);
+                show("Camera unavailable • " + ex.getClass().getSimpleName() + " • tap to retry");
+            }
+        }, ContextCompat.getMainExecutor(activity));
+    }
+    private void checkPreview(int generation) {
+        previewHandler.postDelayed(() -> {
+            if (destroyed || paused || inReview || generation != bindGeneration || previewStreaming) return;
+            if (mode != Mode.PHOTO && mode != Mode.VIDEO) {
+                android.util.Log.w("OpenFrame", "Extension preview failed to stream; reverting to Photo");
+                mode = Mode.PHOTO;
+                refreshModeChips();
+                show("Device extension failed • switching to standard Photo");
+                bindCamera();
+                return;
+            }
+            if (recoveryAttempts < 1) {
+                recoveryAttempts++;
+                android.util.Log.w("OpenFrame", "No camera frames; retrying regular preview");
+                show("Preview stalled • retrying camera");
+                bindCamera();
+            } else {
+                show("No live preview • tap here to retry / check camera access");
+            }
+        }, mode == Mode.PORTRAIT || mode == Mode.NIGHT || mode == Mode.HDR ? 9000L : 6500L);
     }
     private void bindCamera() {
-        if(provider==null || destroyed || !hasCameraPermission())return;
+        if (provider == null || destroyed || !hasCameraPermission() || inReview) return;
+        final int generation = ++bindGeneration;
+        previewStreaming = false;
         try {
+            if (camera != null && torchEnabled) camera.getCameraControl().enableTorch(false);
             provider.unbindAll();
-            CameraSelector selector=facing==CameraSelector.LENS_FACING_FRONT?CameraSelector.DEFAULT_FRONT_CAMERA:CameraSelector.DEFAULT_BACK_CAMERA;
-            if(mode!=Mode.VIDEO && mode!=Mode.PHOTO && extensions!=null && extensions.isExtensionAvailable(selector,extensionMode(mode)))
-                selector=extensions.getExtensionEnabledCameraSelector(selector,extensionMode(mode));
-            Preview preview=new Preview.Builder().build();
-            preview.setSurfaceProvider(viewfinder.getSurfaceProvider());
-            if(mode==Mode.VIDEO) {
-                Recorder recorder=new Recorder.Builder()
-                    .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD))).build();
-                videoCapture=VideoCapture.withOutput(recorder);
-                imageCapture=null;
-                camera=provider.bindToLifecycle(activity,selector,preview,videoCapture);
-            } else {
-                imageCapture=new ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    .setFlashMode(flashMode).build();
-                videoCapture=null;
-                camera=provider.bindToLifecycle(activity,selector,preview,imageCapture);
+            camera = null;
+            imageCapture = null;
+            videoCapture = null;
+            CameraSelector selector = facing == CameraSelector.LENS_FACING_FRONT
+                    ? CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA;
+            if (mode != Mode.VIDEO && mode != Mode.PHOTO) {
+                if (extensions == null || !extensions.isExtensionAvailable(selector, extensionMode(mode)))
+                    throw new IllegalStateException("Requested extension no longer available");
+                selector = extensions.getExtensionEnabledCameraSelector(selector, extensionMode(mode));
             }
-            ZoomState z=camera.getCameraInfo().getZoomState().getValue();
-            if(z!=null){zoomSeek.setEnabled(z.getMaxZoomRatio()>z.getMinZoomRatio());zoomLabel.setText(String.format(java.util.Locale.US,"%.1f×",z.getZoomRatio()));}
+            Preview preview = new Preview.Builder().build();
+            preview.setSurfaceProvider(viewfinder.getSurfaceProvider());
+            if (mode == Mode.VIDEO) {
+                Recorder recorder = new Recorder.Builder().setQualitySelector(
+                    QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD))).build();
+                videoCapture = VideoCapture.withOutput(recorder);
+                camera = provider.bindToLifecycle(activity, selector, preview, videoCapture);
+            } else {
+                imageCapture = new ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setFlashMode(flashMode).build();
+                camera = provider.bindToLifecycle(activity, selector, preview, imageCapture);
+            }
+            if (mode == Mode.VIDEO && torchEnabled && camera.getCameraInfo().hasFlashUnit())
+                camera.getCameraControl().enableTorch(true);
+            ZoomState zoom = camera.getCameraInfo().getZoomState().getValue();
+            if (zoom != null) {
+                zoomSeek.setEnabled(zoom.getMaxZoomRatio() > zoom.getMinZoomRatio());
+                zoomLabel.setText(String.format(java.util.Locale.US, "%.1f×", zoom.getZoomRatio()));
+            }
             exposureSeek.setEnabled(camera.getCameraInfo().getExposureState().isExposureCompensationSupported());
-            show(mode.name()+" • tap anywhere to focus");
-        }catch(Exception ex){
-            android.util.Log.e("OpenFrame","Camera bind failed",ex);
+            camera.getCameraInfo().getCameraState().observe(activity, state -> {
+                if (generation != bindGeneration || destroyed || inReview) return;
+                if (state.getError() != null) {
+                    android.util.Log.e("OpenFrame", "Camera state error " + state.getError().getCode());
+                    show("Camera error " + state.getError().getCode() + " • tap here to retry");
+                }
+            });
+            updateAspectUi();
+            updateFlashUi();
+            show("Opening " + mode.name() + " preview…");
+            checkPreview(generation);
+        } catch (Exception ex) {
+            android.util.Log.e("OpenFrame", "Camera bind failed", ex);
             Mode failed = mode;
-            mode=Mode.PHOTO;
-            refreshModeChips();
-            if(failed!=Mode.PHOTO) bindCamera();
-            else show("Camera unavailable on this lens");
+            if (failed != Mode.PHOTO) {
+                mode = Mode.PHOTO;
+                torchEnabled = false;
+                refreshModeChips();
+                bindCamera();
+            } else show("Camera unavailable • " + ex.getClass().getSimpleName() + " • tap to retry");
         }
     }
     private void onShutter(TextView button) {
@@ -501,7 +636,7 @@ public final class CameraXEngine implements CameraEngine {
         if(captureFile==null || !captureFile.exists())return;
         inReview=true;
         viewfinder.setVisibility(View.INVISIBLE);grid.setVisibility(View.GONE);
-        topBar.setVisibility(View.GONE);bottomPanel.setVisibility(View.GONE);
+        topControls.setVisibility(View.GONE);bottomPanel.setVisibility(View.GONE);
         reviewBar.setVisibility(View.VISIBLE);
         boolean video=captureFile.getName().endsWith(".mp4");
         boolean canFilter=!video && session.request().allowEditing && session.request().purpose!=CameraRequest.Purpose.TENANT_PHOTO;
@@ -554,7 +689,7 @@ public final class CameraXEngine implements CameraEngine {
         if(reviewBitmap!=null){reviewBitmap.recycle();reviewBitmap=null;}
         if(captureFile!=null)captureFile.delete();captureFile=null;
         inReview=false;filterIndex=0;brightness=0;
-        reviewBar.setVisibility(View.GONE);topBar.setVisibility(View.VISIBLE);
+        reviewBar.setVisibility(View.GONE);topControls.setVisibility(View.VISIBLE);
         bottomPanel.setVisibility(View.VISIBLE);viewfinder.setVisibility(View.VISIBLE);
         grid.setVisibility(gridEnabled?View.VISIBLE:View.GONE);
         show("Retake • ready");
@@ -566,8 +701,19 @@ public final class CameraXEngine implements CameraEngine {
         else session.confirmJpeg(captureFile,filterIndex,brightness,selectedAspect);
     }
     @Override public boolean onBackPressed() { if(isRecording)return true; if(inReview){retake();return true;}return false; }
-    @Override public void onResume() { if(videoReview!=null&&inReview&&videoReview.getVisibility()==View.VISIBLE)videoReview.start(); }
-    @Override public void onPause() { if(videoReview!=null)videoReview.pause();if(isRecording&&recording!=null)recording.stop(); }
+    @Override public void onResume() {
+        paused = false;
+        if (videoReview != null && inReview && videoReview.getVisibility() == View.VISIBLE) videoReview.start();
+        if (!inReview && hasCameraPermission()) {
+            if (provider == null) initializeCamera();
+            else if (!previewStreaming && bindGeneration > 0) checkPreview(bindGeneration);
+        }
+    }
+    @Override public void onPause() {
+        paused = true;
+        if (videoReview != null) videoReview.pause();
+        if (isRecording && recording != null) recording.stop();
+    }
     @Override public void onSaveInstanceState(Bundle out) {
         out.putString("of_mode",mode.name());out.putInt("of_facing",facing);
         out.putString("of_capture",captureFile==null?null:captureFile.getAbsolutePath());
@@ -577,6 +723,7 @@ public final class CameraXEngine implements CameraEngine {
     }
     @Override public void onDestroy() {
         destroyed=true;
+        previewHandler.removeCallbacksAndMessages(null);
         if(recording!=null){recording.stop();recording=null;}
         if(provider!=null)provider.unbindAll();
         if(videoReview!=null)videoReview.stopPlayback();
