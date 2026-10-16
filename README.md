@@ -72,3 +72,28 @@ void takePortrait() { camera.launch(CameraRequest.tenantPhoto()); }
 MIT license for **new OpenFrame source**, not the Oplus reference APK, its binaries, or its assets. Read `LICENSE`, `CONTRIBUTING.md`, and `SECURITY.md`. Before publishing, review all code and choose a repository owner. CameraX/AndroidX remain subject to their own licenses.
 
 **Build honesty:** This archive was validated via static checks and Java contract tests where available; an Android build / device run was not performed on the authoring machine because no Android SDK/Gradle installation was found.
+
+
+## Premium OpenFrame UI (design update)
+
+The standalone APK and embeddable library share one original camera user interface
+inspired by premium mobile camera workflows (not a reproduction of an OEM skin).
+This release introduces a dedicated preview stage with black letterboxing, compact
+top controls, orange-highlighted mode tabs, a horizontal mode strip, zoom presets,
+a bottom shutter deck, animated options, and a camera tools sheet.
+
+**Working controls:** Photo and Video; device-supported Portrait, Night, HDR
+extensions; flash and torch when available; real 3:4, 4:3, and 1:1 post-capture
+crop framing; shutter timers, zoom and exposure slider, front/back camera switch,
+review filters, brightness, recapture and private handoff.
+
+**Not implemented yet:** Pro/RAW, ultra-wide physical camera routing, 4K/60fps/8K
+selection, panorama, long-exposure stacking, action stabilization, XPAN and dual
+video. They appear as clearly identified future features only, not as selectable
+or falsely working camera modes. Do not confuse zoom presets with physical lenses.
+
+The camera launcher uses a resized version of the user-provided OpenFrame
+neon-blue lens icon. The original high-resolution source remains with the designer
+and is not copied from OnePlus. Build this repository's `main` branch through
+GitHub Actions to get the current standalone APK and reusable AAR.
+
