@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Camera Bridge Demo</title>
+<style>body{font-family:sans-serif;margin:28px;background:#f7f8fa}label{display:block;margin:24px 0 9px}.frame{max-width:470px;margin:auto;background:white;padding:22px;border-radius:16px}img{object-fit:cover;max-width:180px;max-height:210px;display:block;margin-top:12px}</style></head><body><section class="frame">
+<h2>Resident 1</h2><p>Host WebView integration demonstration. OpenFrame CameraX engine runs inside this application (no separate APK).</p>
+<label for="name">Resident name</label><input id="name" placeholder="Type name; must remain after capture"/>
+<label for="resident">Capture resident photo (front camera)</label>
+<input id="resident" type="file" accept="image/*" capture="user"/>
+<img id="photo" alt="No selected photo"/>
+<label for="payment">Payment proof / gallery / PDF (unchanged chooser)</label>
+<input id="payment" type="file" accept="image/*,application/pdf"/>
+<p id="status">No photo selected.</p></section>
+<script>
+const field=document.getElementById('resident');let objectUrl;
+field.addEventListener('change',()=>{
+ const file=field.files&&field.files[0];if(!file)return;
+ if(objectUrl)URL.revokeObjectURL(objectUrl);
+ objectUrl=URL.createObjectURL(file);
+ document.getElementById('photo').src=objectUrl;
+ document.getElementById('status').textContent='Chosen: '+file.name;
+ // Production Rent app now ingests photo using its OWN encrypted/offline workflow.
+ // Do not auto-upload within camera SDK.
+});
+</script></body></html>
