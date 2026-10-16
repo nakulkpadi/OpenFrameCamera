@@ -45,7 +45,8 @@ public final class CameraSession {
         worker.execute(() -> {
             CameraResult result;
             try {
-                if (request.format != CameraRequest.Format.JPEG) throw new IOException("UNSUPPORTED_OUTPUT_FORMAT");
+                if (request.format == CameraRequest.Format.HEIC || request.format == CameraRequest.Format.PNG)
+                    throw new IOException("UNSUPPORTED_OUTPUT_FORMAT");
                 ImageFinalizer.Output output = ImageFinalizer.finalizeJpeg(activity, captured, request, filter, brightness, aspect);
                 result = CameraResult.success(toUri(output.file), "image/jpeg", output.width, output.height);
             } catch (Exception ex) {
