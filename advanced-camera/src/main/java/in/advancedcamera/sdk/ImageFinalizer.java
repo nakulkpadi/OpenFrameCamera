@@ -49,8 +49,12 @@ final class ImageFinalizer {
                 if (rotated != decoded) { decoded.recycle(); decoded = rotated; }
             }
             if (aspect != CameraRequest.AspectRatio.ORIGINAL) {
-                double ratio = aspect == CameraRequest.AspectRatio.THREE_FOUR ? 0.75
-                    : aspect == CameraRequest.AspectRatio.FOUR_THREE ? 4.0 / 3.0 : 1.0;
+                // 16:9 follows the sensor/image orientation: 9:16 in portrait,
+                // 16:9 in landscape. The actual JPEG is cropped, not just the UI.
+                double ratio = aspect == CameraRequest.AspectRatio.SIXTEEN_NINE
+                    ? (decoded.getWidth() < decoded.getHeight() ? 9.0/16.0 : 16.0/9.0)
+                    : aspect == CameraRequest.AspectRatio.THREE_FOUR ? 0.75
+                    : aspect == CameraRequest.AspectRatio.FOUR_THREE ? 4.0/3.0 : 1.0;
                 int w = decoded.getWidth(), h = decoded.getHeight();
                 int newW = w, newH = h;
                 if ((double)w / h > ratio) newW = Math.max(1, (int)Math.round(h * ratio));
